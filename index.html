@@ -1,0 +1,818 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8">
+  <title>Three.js FPS Game</title>
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+    }
+
+    canvas {
+      display: block;
+    }
+
+    #crosshair {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: 20px;
+      height: 20px;
+      margin: -10px 0 0 -10px;
+      color: white;
+      font-size: 20px;
+      text-align: center;
+      pointer-events: none;
+    }
+
+    #scope-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: radial-gradient(circle, transparent 40%, rgba(0, 0, 0, 0.85) 40.5%, black 45%);
+      pointer-events: none;
+      display: none;
+      z-index: 10;
+    }
+
+    #scope-crosshair {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: 100px;
+      height: 100px;
+      margin: -50px 0 0 -50px;
+      pointer-events: none;
+    }
+
+    #scope-crosshair .horizontal {
+      position: absolute;
+      top: 50%;
+      left: 0;
+      width: 100%;
+      height: 1px;
+      background-color: black;
+    }
+
+    #scope-crosshair .vertical {
+      position: absolute;
+      top: 0;
+      left: 50%;
+      width: 1px;
+      height: 100%;
+      background-color: black;
+    }
+
+    #scope-crosshair .center-dot {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: 4px;
+      height: 4px;
+      margin: -2px 0 0 -2px;
+      background-color: red;
+      border-radius: 50%;
+    }
+
+    #scope-crosshair .range-marks {
+      position: absolute;
+      color: black;
+      font-size: 10px;
+      font-family: monospace;
+    }
+
+    #scope-crosshair .range-mark-100 {
+      top: 60%;
+      left: 50%;
+      transform: translateX(-50%);
+    }
+
+    #scope-crosshair .range-mark-200 {
+      top: 70%;
+      left: 50%;
+      transform: translateX(-50%);
+    }
+
+    #scope-crosshair .range-mark-300 {
+      top: 80%;
+      left: 50%;
+      transform: translateX(-50%);
+    }
+  </style>
+  <!-- Load Three.js and controls via regular script tags -->
+  <script src="https://cdn.jsdelivr.net/gh/mrdoob/three.js@r128/build/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/gh/mrdoob/three.js@r128/examples/js/controls/PointerLockControls.js"></script>
+  <!-- Load our gun system -->
+  <script src="guns.js"></script>
+  <!-- Load our building system -->
+  <script src="buildings.js"></script>
+  <!-- Load our animal system -->
+  <script src="animals.js"></script>
+</head>
+
+<body>
+  <div id="crosshair">+</div>
+  <div id="scope-overlay">
+    <div id="scope-crosshair">
+      <div class="horizontal"></div>
+      <div class="vertical"></div>
+      <div class="center-dot"></div>
+      <div class="range-marks range-mark-100">100m</div>
+      <div class="range-marks range-mark-200">200m</div>
+      <div class="range-marks range-mark-300">300m</div>
+    </div>
+  </div>
+  <script>
+    // Game variables
+    let camera, scene, renderer, controls;
+    let moveForward = false;
+    let moveBackward = false;
+    let moveLeft = false;
+    let moveRight = false;
+    let canJump = false;
+    let isJumping = false;
+    let jumpHeight = 20;
+    let gravity = 60;
+    let playerHeight = 1.6;
+    window.walls = []; // Make walls array globally accessible
+    let playerRadius = 0.2; // Even smaller collision radius
+    let raycaster = new THREE.Raycaster(); // For collision detection
+    let currentGun; // Current active gun
+
+    let prevTime = performance.now();
+    const velocity = new THREE.Vector3();
+    const direction = new THREE.Vector3();
+    const playerCollider = new THREE.Box3(); // Player collision box
+
+    // Track mouse state
+    let isMouseDown = false;
+
+    // Add this at the top with other variables
+    let debugMode = false;
+    let debugObjects = [];
+
+    // Add this with other global variables
+    window.bunnies = [];
+
+    init();
+    animate();
+
+    function init() {
+      // Setup scene first
+      scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x87ceeb); // Sky blue
+      scene.fog = new THREE.Fog(0x87ceeb, 0, 500);
+
+      // Then setup camera
+      camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+      camera.position.y = 1.6; // Approximate eye height
+
+      // Now add camera to scene
+      scene.add(camera);
+
+      // Add lighting
+      const light = new THREE.HemisphereLight(0xeeeeff, 0x777788, 0.7);
+      light.position.set(0, 100, 0);
+      scene.add(light);
+
+      // Add directional light (sun)
+      const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+      dirLight.position.set(50, 100, 50);
+      dirLight.castShadow = true;
+      dirLight.shadow.mapSize.width = 2048;
+      dirLight.shadow.mapSize.height = 2048;
+      dirLight.shadow.camera.far = 500;
+      dirLight.shadow.camera.left = -100;
+      dirLight.shadow.camera.right = 100;
+      dirLight.shadow.camera.top = 100;
+      dirLight.shadow.camera.bottom = -100;
+      scene.add(dirLight);
+
+      // Create hilly terrain instead of flat ground
+      createHillyTerrain();
+
+      // Setup controls
+      controls = new THREE.PointerLockControls(camera, document.body);
+
+      // Add event listeners for controls
+      document.addEventListener('click', function () {
+        controls.lock();
+      });
+
+      controls.addEventListener('lock', function () {
+        // Game started
+      });
+
+      controls.addEventListener('unlock', function () {
+        // Game paused
+      });
+
+      // Add keyboard controls
+      document.addEventListener('keydown', onKeyDown);
+      document.addEventListener('keyup', onKeyUp);
+
+      // Setup renderer
+      renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setPixelRatio(window.devicePixelRatio);
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.shadowMap.enabled = true;
+      document.body.appendChild(renderer.domElement);
+
+      // Handle window resize
+      window.addEventListener('resize', onWindowResize);
+
+      // Create gun after camera is added to scene - start with pistol instead of gatling gun
+      currentGun = new GunSystem.Pistol(scene, camera);
+      currentGun.create();
+
+      // Add mouse events for shooting
+      document.addEventListener('mousedown', onMouseDown);
+      document.addEventListener('mouseup', onMouseUp);
+    }
+
+    function onWindowResize() {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    }
+
+    function onKeyDown(event) {
+      switch (event.code) {
+        case 'ArrowUp':
+        case 'KeyW':
+          moveForward = true;
+          break;
+        case 'ArrowLeft':
+        case 'KeyA':
+          moveLeft = true;
+          break;
+        case 'ArrowDown':
+        case 'KeyS':
+          moveBackward = true;
+          break;
+        case 'ArrowRight':
+        case 'KeyD':
+          moveRight = true;
+          break;
+        case 'Space':
+          if (canJump === true) {
+            velocity.y = jumpHeight;
+            isJumping = true;
+            canJump = false;
+          } else if (currentGun.canShoot) {
+            // Also allow shooting with spacebar
+            currentGun.shoot();
+          }
+          break;
+        case 'KeyB':
+          // Toggle debug mode
+          debugMode = !debugMode;
+          toggleDebugMode();
+          break;
+        case 'Digit1':
+          // Switch to pistol
+          if (!(currentGun instanceof GunSystem.Pistol)) {
+            switchWeapon('pistol');
+          }
+          break;
+        case 'Digit2':
+          // Switch to gatling gun
+          if (!(currentGun instanceof GunSystem.GatlingGun)) {
+            switchWeapon('gatling');
+          }
+          break;
+        case 'Digit3':
+          // Switch to sniper rifle
+          if (!(currentGun instanceof GunSystem.SniperRifle)) {
+            switchWeapon('sniper');
+          }
+          break;
+        case 'Digit4':
+          // Switch to bazooka
+          if (!(currentGun instanceof GunSystem.Bazooka)) {
+            switchWeapon('bazooka');
+          }
+          break;
+      }
+    }
+
+    function onKeyUp(event) {
+      switch (event.code) {
+        case 'ArrowUp':
+        case 'KeyW':
+          moveForward = false;
+          break;
+        case 'ArrowLeft':
+        case 'KeyA':
+          moveLeft = false;
+          break;
+        case 'ArrowDown':
+        case 'KeyS':
+          moveBackward = false;
+          break;
+        case 'ArrowRight':
+        case 'KeyD':
+          moveRight = false;
+          break;
+      }
+    }
+
+    function onMouseDown(event) {
+      // Only handle left mouse button
+      if (event.button !== 0) return;
+
+      isMouseDown = true;
+
+      if (!currentGun) return;
+
+      console.log("Mouse down, gun type:", currentGun.constructor.name);
+
+      // Handle different gun types appropriately
+      if (currentGun instanceof GunSystem.Bazooka) {
+        // For bazooka, store mouse state and fire once
+        currentGun.isMouseDown = true;
+        currentGun.shoot();
+      } else if (currentGun instanceof GunSystem.GatlingGun) {
+        // For gatling gun, start continuous firing
+        console.log("Starting gatling gun firing");
+        currentGun.startFiring();
+      } else {
+        // For other guns (pistol, sniper), just fire once
+        currentGun.shoot();
+      }
+    }
+
+    function onMouseUp(event) {
+      // Only handle left mouse button
+      if (event.button !== 0) return;
+
+      isMouseDown = false;
+
+      if (!currentGun) return;
+
+      console.log("Mouse up, gun type:", currentGun.constructor.name);
+
+      // Handle different gun types appropriately
+      if (currentGun instanceof GunSystem.Bazooka) {
+        // For bazooka, update mouse state
+        currentGun.isMouseDown = false;
+      } else if (currentGun instanceof GunSystem.GatlingGun) {
+        // For gatling gun, stop continuous firing
+        console.log("Stopping gatling gun firing");
+        currentGun.stopFiring();
+      }
+      // No action needed for single-shot weapons
+    }
+
+    function createHillyTerrain() {
+      // Create a simple flat ground
+      const groundGeometry = new THREE.PlaneGeometry(1000, 1000);
+      const groundMaterial = new THREE.MeshLambertMaterial({
+        color: 0x2F4F2F, // Darker forest green (Dark Slate Gray)
+        side: THREE.DoubleSide
+      });
+      const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+      ground.rotation.x = -Math.PI / 2;
+      ground.position.y = 0;
+      ground.receiveShadow = true;
+      scene.add(ground);
+
+      // Add buildings instead of just walls
+      addBuildings();
+
+      // Add bunnies
+      addBunnies(15); // Add 15 bunnies
+
+      // Position player at a good starting point
+      camera.position.set(0, playerHeight, 0);
+    }
+
+    function addBuildings() {
+      // Create a small town with various buildings
+
+      // Add some houses
+      for (let i = 0; i < 5; i++) {
+        const house = new BuildingSystem.House(scene,
+          new THREE.Vector3(
+            Math.random() * 80 - 40,
+            0,
+            Math.random() * 80 - 40
+          ),
+          {
+            width: 8 + Math.random() * 4,
+            depth: 6 + Math.random() * 4,
+            height: 3 + Math.random() * 2,
+            color: new THREE.Color(
+              0.8 + Math.random() * 0.2,
+              0.8 + Math.random() * 0.2,
+              0.8 + Math.random() * 0.2
+            )
+          }
+        );
+        house.create();
+      }
+
+      // Add a few office buildings
+      for (let i = 0; i < 3; i++) {
+        const office = new BuildingSystem.OfficeBuilding(scene,
+          new THREE.Vector3(
+            Math.random() * 100 - 50,
+            0,
+            Math.random() * 100 - 50
+          ),
+          {
+            width: 15 + Math.random() * 10,
+            depth: 15 + Math.random() * 10,
+            height: 12 + Math.random() * 8,
+            floors: 2 + Math.floor(Math.random() * 3)
+          }
+        );
+        office.create();
+      }
+
+      // Keep some of the original walls for variety
+      addWalls(5); // Reduced number of walls
+    }
+
+    // Update the addWalls function to take a count parameter
+    function addWalls(count = 10) {
+      // Add some obstacles/walls
+      const wallGeometry = new THREE.BoxGeometry(10, 5, 1);
+      const wallMaterial = new THREE.MeshLambertMaterial({
+        color: 0xbb9977
+      });
+
+      // Create a few walls with different rotations
+      for (let i = 0; i < count; i++) {
+        const wall = new THREE.Mesh(wallGeometry, wallMaterial);
+        wall.position.x = Math.random() * 100 - 50;
+        wall.position.z = Math.random() * 100 - 50;
+
+        // Get terrain height at wall position
+        const terrainHeight = getTerrainHeightAtPosition(wall.position.x, wall.position.z);
+        wall.position.y = terrainHeight + 2.5; // Half height of wall
+
+        wall.rotation.y = Math.random() * Math.PI * 2;
+        wall.castShadow = true;
+        wall.receiveShadow = true;
+
+        // Add health to the wall
+        wall.userData.health = 500;
+        wall.userData.destroyed = false;
+
+        scene.add(wall);
+
+        // Store wall for collision detection
+        window.walls.push(wall);
+      }
+    }
+
+    function getTerrainHeightAtPosition(x, z) {
+      // For flat ground, always return 0
+      return 0;
+    }
+
+    function positionPlayerOnTerrain() {
+      // This is a simplified version - in a real game you'd use your terrain height function
+      // For now, we'll just keep the player at a fixed height
+      const terrainHeight = 0; // Flat terrain
+
+      // Ensure player is above terrain
+      if (camera.position.y < terrainHeight + playerHeight) {
+        camera.position.y = terrainHeight + playerHeight;
+        velocity.y = 0;
+        canJump = true;
+        isJumping = false;
+      }
+    }
+
+    function animate() {
+      requestAnimationFrame(animate);
+
+      if (controls.isLocked === true) {
+        const time = performance.now();
+        const delta = (time - prevTime) / 1000;
+
+        // Skip movement processing if camera is shaking
+        if (!window.isShakingCamera) {
+          // Get player velocity
+          velocity.x -= velocity.x * 10.0 * delta;
+          velocity.z -= velocity.z * 10.0 * delta;
+
+          // Apply gravity
+          velocity.y -= gravity * delta;
+
+          // Set movement direction
+          direction.z = Number(moveForward) - Number(moveBackward);
+          direction.x = Number(moveRight) - Number(moveLeft);
+          direction.normalize();
+
+          // Calculate movement speed based on weapon
+          let movementSpeed = 400.0; // Restore to original higher value
+
+          // Reduce speed when holding bazooka, but not too much
+          if (currentGun instanceof GunSystem.Bazooka) {
+            movementSpeed = 200.0; // Half speed with bazooka, but still fast enough
+          }
+
+          // Move player
+          if (moveForward || moveBackward) velocity.z -= direction.z * movementSpeed * delta;
+          if (moveLeft || moveRight) velocity.x -= direction.x * movementSpeed * delta;
+
+          // Save current position for collision detection
+          const oldPosition = camera.position.clone();
+
+          // Apply velocity to position
+          controls.moveRight(-velocity.x * delta);
+          controls.moveForward(-velocity.z * delta);
+          camera.position.y += velocity.y * delta;
+
+          // Check if we're on the ground
+          if (camera.position.y < playerHeight) {
+            velocity.y = 0;
+            camera.position.y = playerHeight;
+            canJump = true;
+            isJumping = false;
+          }
+
+          // Check for collisions with walls
+          if (isCollidingWithWalls()) {
+            // Restore old position if collision detected
+            camera.position.copy(oldPosition);
+            velocity.x = 0;
+            velocity.z = 0;
+          }
+
+          // Position player on terrain
+          positionPlayerOnTerrain();
+        }
+
+        // Update gun
+        if (currentGun) {
+          // Update gun state - make sure this is called
+          if (typeof currentGun.update === 'function') {
+            currentGun.update(delta);
+          }
+
+          // Update bullets
+          if (typeof currentGun.updateBullets === 'function') {
+            currentGun.updateBullets(delta, window.walls);
+          }
+
+          // Auto-shoot if mouse is held down - ONLY for Bazooka
+          if (isMouseDown &&
+            currentGun instanceof GunSystem.Bazooka &&
+            currentGun.isMouseDown &&
+            currentGun.canShoot) {
+            currentGun.shoot();
+          }
+        }
+
+        // Update particles
+        updateParticles(delta);
+
+        // Update bunnies
+        if (window.bunnies) {
+          window.bunnies.forEach(bunny => {
+            bunny.update(delta, time / 1000, window.walls);
+          });
+        }
+
+        prevTime = time;
+      }
+
+      renderer.render(scene, camera);
+    }
+
+    function cleanupDestroyedWalls() {
+      // Remove any walls that have been marked as destroyed
+      for (let i = window.walls.length - 1; i >= 0; i--) {
+        if (window.walls[i].userData.destroyed) {
+          window.walls.splice(i, 1);
+        }
+      }
+    }
+
+    function isCollidingWithWalls() {
+      // Get player position (at body level, not eye level)
+      const playerPos = camera.position.clone();
+      playerPos.y -= 0.8; // Lower to body center
+
+      // Create a sphere representing the player's collision volume
+      const playerSphere = new THREE.Sphere(playerPos, playerRadius);
+
+      // Check collision with each wall
+      for (const wall of window.walls) {
+        // Skip destroyed walls
+        if (wall.userData.destroyed) continue;
+
+        // Get wall's world matrix
+        wall.updateMatrixWorld(true);
+
+        // Create a box3 for the wall in world space
+        const wallGeometry = wall.geometry;
+        if (!wallGeometry) continue;
+
+        const wallBox = new THREE.Box3().setFromObject(wall);
+
+        // Check if player sphere intersects with wall box
+        if (wallBox.intersectsSphere(playerSphere)) {
+          // For doors, check if it's a door and allow passage
+          if (wall.userData.buildingPart === 'door' ||
+            wall.userData.buildingPart === 'window') {
+            continue;
+          }
+
+          return true;
+        }
+      }
+
+      return false;
+    }
+
+    function updateParticles(delta) {
+      if (!window.particles) return;
+
+      const currentTime = performance.now();
+
+      // Update each particle
+      for (let i = window.particles.length - 1; i >= 0; i--) {
+        const particle = window.particles[i];
+
+        // Check if particle should be removed
+        if (currentTime - particle.userData.createdAt > particle.userData.lifespan) {
+          scene.remove(particle);
+          window.particles.splice(i, 1);
+          continue;
+        }
+
+        // Skip blood pools and ground marks for movement (they stay in place)
+        if (particle.userData.isBloodPool || particle.userData.isGroundMark) {
+          // Just fade out over time
+          const age = (currentTime - particle.userData.createdAt) / particle.userData.lifespan;
+          if (age > 0.7) { // Start fading after 70% of lifespan
+            const fadeProgress = (age - 0.7) / 0.3; // Normalize to 0-1 for last 30%
+            particle.material.opacity = 0.7 * (1 - fadeProgress);
+          }
+          continue;
+        }
+
+        // Move particle
+        particle.position.add(particle.userData.velocity.clone().multiplyScalar(delta));
+
+        // Apply gravity
+        particle.userData.velocity.y -= 9.8 * delta;
+
+        // Special handling for dirt particles - bounce off ground
+        if (particle.userData.isDirt && particle.position.y < 0.05) {
+          particle.position.y = 0.05;
+          particle.userData.velocity.y = -particle.userData.velocity.y * 0.3; // Bounce with 30% energy
+          particle.userData.velocity.x *= 0.8; // Friction
+          particle.userData.velocity.z *= 0.8; // Friction
+
+          // If moving very slowly, just stop
+          if (Math.abs(particle.userData.velocity.y) < 0.5) {
+            particle.userData.velocity.set(0, 0, 0);
+          }
+        }
+
+        // Fade out
+        const age = (currentTime - particle.userData.createdAt) / particle.userData.lifespan;
+        particle.material.opacity = 1 - age;
+      }
+    }
+
+    function switchWeapon(weaponType) {
+      // Clean up current gun if it has a cleanup method
+      if (currentGun && typeof currentGun.cleanup === 'function') {
+        currentGun.cleanup();
+      }
+
+      // Remove current gun from camera
+      if (currentGun && currentGun.mesh) {
+        camera.remove(currentGun.mesh);
+      }
+
+      // Reset camera FOV to default when switching weapons
+      camera.fov = 75;
+      camera.updateProjectionMatrix();
+
+      // Hide scope overlay when switching weapons
+      const scopeOverlay = document.getElementById('scope-overlay');
+      if (scopeOverlay) {
+        scopeOverlay.style.display = 'none';
+      }
+
+      // Create new gun
+      switch (weaponType) {
+        case 'pistol':
+          currentGun = new GunSystem.Pistol(scene, camera);
+          break;
+        case 'gatling':
+          currentGun = new GunSystem.GatlingGun(scene, camera);
+          break;
+        case 'sniper':
+          currentGun = new GunSystem.SniperRifle(scene, camera);
+          break;
+        case 'bazooka':
+          currentGun = new GunSystem.Bazooka(scene, camera);
+          break;
+        default:
+          currentGun = new GunSystem.Pistol(scene, camera); // Default to pistol
+      }
+
+      // Create the new gun
+      currentGun.create();
+
+      // Display weapon switch message
+      console.log(`Switched to ${weaponType}`);
+    }
+
+    function toggleDebugMode() {
+      // Clear existing debug objects
+      debugObjects.forEach(obj => scene.remove(obj));
+      debugObjects = [];
+
+      if (debugMode) {
+        // Create debug visualizations for all collision objects
+        window.walls.forEach(wall => {
+          if (wall.userData.destroyed) return;
+
+          const box = new THREE.Box3().setFromObject(wall);
+          const helper = new THREE.Box3Helper(box, 0xff0000);
+          scene.add(helper);
+          debugObjects.push(helper);
+
+          // Add text label for wall type
+          const center = new THREE.Vector3();
+          box.getCenter(center);
+
+          // Create a canvas for the text
+          const canvas = document.createElement('canvas');
+          canvas.width = 256;
+          canvas.height = 128;
+          const ctx = canvas.getContext('2d');
+          ctx.fillStyle = 'white';
+          ctx.font = '24px Arial';
+          ctx.fillText(wall.userData.buildingPart || 'wall', 10, 64);
+
+          // Create a texture from the canvas
+          const texture = new THREE.CanvasTexture(canvas);
+          const material = new THREE.SpriteMaterial({ map: texture });
+          const sprite = new THREE.Sprite(material);
+          sprite.position.copy(center);
+          sprite.scale.set(5, 2.5, 1);
+
+          scene.add(sprite);
+          debugObjects.push(sprite);
+        });
+
+        console.log("Debug mode enabled - collision boxes visible");
+      } else {
+        console.log("Debug mode disabled");
+      }
+    }
+
+    function addBunnies(count) {
+      for (let i = 0; i < count; i++) {
+        // Create bunny at random position
+        const bunnyPosition = new THREE.Vector3(
+          Math.random() * 160 - 80, // X: -80 to 80
+          0.5,                      // Y: slightly above ground
+          Math.random() * 160 - 80  // Z: -80 to 80
+        );
+
+        const bunny = new AnimalSystem.Bunny(scene, bunnyPosition);
+        bunny.create();
+
+        // Add to global array for updating
+        window.bunnies.push(bunny);
+      }
+
+      console.log(`Added ${count} bunnies to the scene`);
+    }
+
+    function updateBunnies(delta) {
+      if (!window.bunnies) return;
+
+      const currentTime = performance.now();
+
+      // Update each bunny
+      for (let i = window.bunnies.length - 1; i >= 0; i--) {
+        const bunny = window.bunnies[i];
+
+        // Update bunny
+        bunny.update(delta, currentTime, window.walls);
+
+        // Check for collision with walls
+        bunny.checkCollisions(window.walls);
+      }
+    }
+  </script>
+</body>
+
+</html>
