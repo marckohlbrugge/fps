@@ -102,6 +102,104 @@
       left: 50%;
       transform: translateX(-50%);
     }
+
+    #health-display {
+      position: absolute;
+      bottom: 20px;
+      left: 20px;
+      color: white;
+      font-size: 18px;
+      font-family: Arial, sans-serif;
+      background-color: rgba(0, 0, 0, 0.5);
+      padding: 10px;
+      border-radius: 5px;
+      z-index: 100;
+    }
+
+    #kill-count {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      color: white;
+      font-size: 18px;
+      font-family: Arial, sans-serif;
+      background-color: rgba(0, 0, 0, 0.5);
+      padding: 10px;
+      border-radius: 5px;
+      z-index: 100;
+    }
+
+    #timer-display {
+      position: absolute;
+      top: 20px;
+      left: 20px;
+      color: white;
+      font-size: 18px;
+      font-family: Arial, sans-serif;
+      background-color: rgba(0, 0, 0, 0.5);
+      padding: 10px;
+      border-radius: 5px;
+      z-index: 100;
+    }
+
+    #game-info {
+      position: absolute;
+      bottom: 20px;
+      right: 20px;
+      color: white;
+      font-size: 14px;
+      font-family: Arial, sans-serif;
+      background-color: rgba(0, 0, 0, 0.5);
+      padding: 10px;
+      border-radius: 5px;
+      z-index: 100;
+      text-align: right;
+    }
+
+    #game-over {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background-color: rgba(0, 0, 0, 0.8);
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      z-index: 1000;
+      display: none;
+    }
+
+    #game-over h1 {
+      color: #ff3333;
+      font-size: 48px;
+      margin-bottom: 20px;
+      text-align: center;
+    }
+
+    #game-over p {
+      color: white;
+      font-size: 24px;
+      margin: 10px 0;
+      text-align: center;
+    }
+
+    #restart-button {
+      margin-top: 30px;
+      padding: 15px 30px;
+      background-color: #ff3333;
+      color: white;
+      font-size: 20px;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+      transition: background-color 0.3s;
+    }
+
+    #restart-button:hover {
+      background-color: #cc0000;
+    }
   </style>
   <!-- Load Three.js and controls via regular script tags -->
   <script src="https://cdn.jsdelivr.net/gh/mrdoob/three.js@r128/build/three.min.js"></script>
@@ -112,6 +210,8 @@
   <script src="buildings.js"></script>
   <!-- Load our animal system -->
   <script src="animals.js"></script>
+  <!-- Load our enemy system -->
+  <script src="enemies.js"></script>
 </head>
 
 <body>
@@ -126,6 +226,21 @@
       <div class="range-marks range-mark-300">300m</div>
     </div>
   </div>
+  <div id="health-display">Health: 100</div>
+  <div id="kill-count">Kills: 0</div>
+  <div id="timer-display">Survival Time: 00:00</div>
+  <div id="game-info">
+    <p>Kill enemies to spawn more!</p>
+    <p>Each kill spawns 2 new enemies</p>
+    <p>Controls: WASD to move, Space to jump</p>
+    <p>1-4: Switch weapons, M: Spawn enemy</p>
+  </div>
+  <div id="game-over">
+    <h1>GAME OVER</h1>
+    <p id="survival-message">You survived AGI for 00:00</p>
+    <p id="kill-message">You eliminated 0 enemies</p>
+    <button id="restart-button">Play Again</button>
+  </div>
   <script>
     // Game variables
     let camera, scene, renderer, controls;
@@ -135,7 +250,7 @@
     let moveRight = false;
     let canJump = false;
     let isJumping = false;
-    let jumpHeight = 20;
+    let jumpHeight = 5;
     let gravity = 60;
     let playerHeight = 1.6;
     window.walls = []; // Make walls array globally accessible
@@ -157,6 +272,167 @@
 
     // Add this with other global variables
     window.bunnies = [];
+
+    // Add enemies array
+    window.enemies = [];
+
+    // Add player health
+    window.playerHealth = 100;
+
+    // Track enemy kills and spawns
+    let enemyKillCount = 0;
+
+    // Add survival timer variables
+    let gameStartTime = 0;
+    let survivalTime = 0;
+    let isGameOver = false;
+
+    // Start the timer when the game begins
+    function startSurvivalTimer() {
+      gameStartTime = Date.now();
+      updateSurvivalTimer();
+    }
+
+    // Update the timer display
+    function updateSurvivalTimer() {
+      if (isGameOver) return;
+
+      survivalTime = Math.floor((Date.now() - gameStartTime) / 1000);
+      const minutes = Math.floor(survivalTime / 60);
+      const seconds = survivalTime % 60;
+
+      const timerDisplay = document.getElementById('timer-display');
+      if (timerDisplay) {
+        timerDisplay.textContent = `Survival Time: ${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+      }
+
+      // Schedule the next update
+      requestAnimationFrame(updateSurvivalTimer);
+    }
+
+    // Format time for display
+    function formatTime(totalSeconds) {
+      const minutes = Math.floor(totalSeconds / 60);
+      const seconds = totalSeconds % 60;
+      return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+    }
+
+    // Show game over screen
+    function showGameOver() {
+      isGameOver = true;
+
+      // Update survival message
+      const survivalMessage = document.getElementById('survival-message');
+      if (survivalMessage) {
+        survivalMessage.textContent = `You survived AGI for ${formatTime(survivalTime)}`;
+      }
+
+      // Update kill message
+      const killMessage = document.getElementById('kill-message');
+      if (killMessage) {
+        killMessage.textContent = `You eliminated ${enemyKillCount} enemies`;
+      }
+
+      // Show game over screen
+      const gameOverScreen = document.getElementById('game-over');
+      if (gameOverScreen) {
+        gameOverScreen.style.display = 'flex';
+      }
+
+      // Unlock controls
+      if (controls) {
+        controls.unlock();
+      }
+    }
+
+    // Restart the game
+    function restartGame() {
+      // Reset game variables
+      window.playerHealth = 100;
+      enemyKillCount = 0;
+      isGameOver = false;
+
+      // Clear enemies
+      if (window.enemies) {
+        for (let i = window.enemies.length - 1; i >= 0; i--) {
+          const enemy = window.enemies[i];
+          if (enemy && enemy.mesh) {
+            scene.remove(enemy.mesh);
+          }
+        }
+        window.enemies = [];
+      }
+
+      // Update displays
+      updateHealthDisplay();
+      const killCountDisplay = document.getElementById('kill-count');
+      if (killCountDisplay) {
+        killCountDisplay.textContent = `Kills: 0`;
+      }
+
+      // Hide game over screen
+      const gameOverScreen = document.getElementById('game-over');
+      if (gameOverScreen) {
+        gameOverScreen.style.display = 'none';
+      }
+
+      // Spawn initial enemies
+      spawnEnemies(3);
+
+      // Reset timer
+      gameStartTime = Date.now();
+
+      // Lock controls again
+      if (controls) {
+        controls.lock();
+      }
+    }
+
+    // Function to spawn enemies when one is killed
+    window.spawnEnemiesOnDeath = function (count) {
+      // Increment kill counter
+      enemyKillCount++;
+
+      // Update kill count display if it exists
+      const killCountDisplay = document.getElementById('kill-count');
+      if (killCountDisplay) {
+        killCountDisplay.textContent = `Kills: ${enemyKillCount}`;
+      }
+
+      // Spawn new enemies with a slight delay
+      setTimeout(() => {
+        spawnEnemies(count);
+      }, 500);
+    };
+
+    // Update health display function
+    function updateHealthDisplay() {
+      const healthDisplay = document.getElementById('health-display');
+      if (healthDisplay) {
+        healthDisplay.textContent = `Health: ${window.playerHealth}`;
+
+        // Change color based on health
+        if (window.playerHealth > 70) {
+          healthDisplay.style.color = 'white';
+        } else if (window.playerHealth > 30) {
+          healthDisplay.style.color = 'yellow';
+        } else {
+          healthDisplay.style.color = 'red';
+        }
+      }
+
+      // Check if player is dead
+      if (window.playerHealth <= 0 && !isGameOver) {
+        showGameOver();
+      }
+    }
+
+    // Add camera shake function
+    window.shakeCamera = function (intensity) {
+      if (currentGun && typeof currentGun.shakeCamera === 'function') {
+        currentGun.shakeCamera(intensity);
+      }
+    };
 
     init();
     animate();
@@ -200,15 +476,23 @@
 
       // Add event listeners for controls
       document.addEventListener('click', function () {
-        controls.lock();
+        if (!isGameOver) {
+          controls.lock();
+        }
       });
 
       controls.addEventListener('lock', function () {
         // Game started
+        if (!isGameOver && gameStartTime === 0) {
+          startSurvivalTimer();
+        }
       });
 
       controls.addEventListener('unlock', function () {
-        // Game paused
+        // Game paused (unless game over)
+        if (!isGameOver) {
+          // Paused state
+        }
       });
 
       // Add keyboard controls
@@ -232,6 +516,15 @@
       // Add mouse events for shooting
       document.addEventListener('mousedown', onMouseDown);
       document.addEventListener('mouseup', onMouseUp);
+
+      // Add restart button event listener
+      const restartButton = document.getElementById('restart-button');
+      if (restartButton) {
+        restartButton.addEventListener('click', restartGame);
+      }
+
+      // Spawn initial enemies
+      spawnEnemies(3);
     }
 
     function onWindowResize() {
@@ -288,6 +581,9 @@
           break;
         case 'KeyN':
           addBunnies(5);
+          break;
+        case 'KeyM':
+          spawnEnemies(1);
           break;
       }
     }
@@ -490,7 +786,7 @@
     function animate() {
       requestAnimationFrame(animate);
 
-      if (controls.isLocked === true) {
+      if (controls.isLocked === true && !isGameOver) {
         const time = performance.now();
         const delta = (time - prevTime) / 1000;
 
@@ -578,6 +874,12 @@
             bunny.update(delta, time / 1000, window.walls);
           });
         }
+
+        // Update enemies
+        updateEnemies(delta, time);
+
+        // Update health display
+        updateHealthDisplay();
 
         prevTime = time;
       }
@@ -834,6 +1136,114 @@
         bunny.checkCollisions(window.walls);
       }
     }
+
+    // Function to spawn enemies
+    function spawnEnemies(count) {
+      for (let i = 0; i < count; i++) {
+        // Create enemy at random position but not too close to player
+        const angle = Math.random() * Math.PI * 2;
+        const distance = 20 + Math.random() * 20; // Between 20 and 40 units from player
+
+        // Get a position relative to the player
+        const enemyPosition = new THREE.Vector3(
+          camera.position.x + Math.cos(angle) * distance,
+          0.5, // Ensure they're on the ground
+          camera.position.z + Math.sin(angle) * distance
+        );
+
+        // Check if position is valid (not inside a wall)
+        if (isPositionValid(enemyPosition)) {
+          const enemy = new EnemySystem.Enemy(scene, enemyPosition, camera);
+          enemy.create();
+
+          // Add to global array for updating
+          window.enemies.push(enemy);
+        } else {
+          // Try again with a different position
+          i--; // Decrement to retry this enemy
+        }
+      }
+
+      console.log(`Added ${count} enemies to the scene. Total enemies: ${window.enemies.length}`);
+    }
+
+    // Function to check if a position is valid (not inside a wall)
+    function isPositionValid(position) {
+      // Create a small sphere at the position
+      const testSphere = new THREE.Sphere(position, 1);
+
+      // Check collision with each wall
+      for (const wall of window.walls) {
+        // Skip destroyed walls
+        if (wall.userData.destroyed) continue;
+
+        const wallBox = new THREE.Box3().setFromObject(wall);
+
+        // If sphere intersects with wall, position is invalid
+        if (wallBox.intersectsSphere(testSphere)) {
+          return false;
+        }
+      }
+
+      return true;
+    }
+
+    function updateEnemies(delta, time) {
+      if (!window.enemies) return;
+
+      // Update each enemy
+      for (let i = window.enemies.length - 1; i >= 0; i--) {
+        const enemy = window.enemies[i];
+
+        // Update enemy
+        enemy.update(delta, time / 1000, window.walls);
+      }
+    }
+
+    // Add this function to check if a bullet hits an enemy
+    function checkBulletEnemyCollisions(bullet) {
+      if (!window.enemies || !window.enemies.length) return false;
+
+      for (let i = 0; i < window.enemies.length; i++) {
+        const enemy = window.enemies[i];
+
+        if (enemy.isDead) continue;
+
+        // Simple sphere collision detection
+        const enemyPosition = enemy.mesh.position.clone();
+        enemyPosition.y += 1.5; // Adjust to center of enemy
+
+        const enemyRadius = 0.7; // Approximate enemy collision radius
+        const distance = bullet.position.distanceTo(enemyPosition);
+
+        if (distance < enemyRadius) {
+          // Bullet hit enemy
+          enemy.takeDamage(bullet.userData.damage);
+
+          return true;
+        }
+      }
+
+      return false;
+    }
+
+    // Modify the Gun class's checkBulletCollisions method to check for enemy collisions
+    // This will be done by monkey patching the method
+    const originalCheckBulletCollisions = GunSystem.Gun.prototype.checkBulletCollisions;
+    GunSystem.Gun.prototype.checkBulletCollisions = function (bullet, walls) {
+      // Check for collisions with enemies first
+      if (checkBulletEnemyCollisions(bullet)) {
+        return {
+          hit: true,
+          position: bullet.position.clone(),
+          normal: new THREE.Vector3(0, 1, 0), // Default normal
+          object: null
+        };
+      }
+
+      // Otherwise use the original method
+      return originalCheckBulletCollisions.call(this, bullet, walls);
+    };
   </script>
 </body>
 
