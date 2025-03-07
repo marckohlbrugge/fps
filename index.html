@@ -233,8 +233,10 @@
     <p>Kill enemies to spawn more!</p>
     <p>Each kill spawns 2 new enemies</p>
     <p>Controls: WASD to move, Space to jump</p>
-    <p>1-5: Switch weapons, M: Spawn enemy</p>
+    <p>1-6: Switch weapons, M: Spawn enemy</p>
     <p>5: Translocator - Become the bullet!</p>
+    <p>6: Akimbo - Dual pistols!</p>
+    <p>P: Switch panoramic background</p>
   </div>
   <div id="game-over">
     <h1>GAME OVER</h1>
@@ -451,6 +453,9 @@
       scene.background = new THREE.Color(0x87ceeb); // Sky blue
       scene.fog = new THREE.Fog(0x87ceeb, 0, 500);
 
+      // Add skybox
+      createSkybox();
+
       // Then setup camera
       camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
       camera.position.y = 1.6; // Approximate eye height
@@ -605,6 +610,9 @@
         case 'Digit5':
           switchWeapon('translocator');
           break;
+        case 'Digit6':
+          switchWeapon('akimbo');
+          break;
         case 'KeyB':
           debugMode = !debugMode;
           toggleDebugMode();
@@ -614,6 +622,11 @@
           break;
         case 'KeyM':
           spawnEnemies(1);
+          break;
+        case 'KeyP':
+          // Switch to next skybox
+          currentSkyboxIndex = (currentSkyboxIndex + 1) % 5;
+          createSkybox(currentSkyboxIndex);
           break;
       }
     }
@@ -670,9 +683,9 @@
         // For bazooka, store mouse state and fire once
         currentGun.isMouseDown = true;
         currentGun.shoot();
-      } else if (currentGun instanceof GunSystem.GatlingGun) {
-        // For gatling gun, start continuous firing
-        console.log("Starting gatling gun firing");
+      } else if (currentGun instanceof GunSystem.GatlingGun || currentGun instanceof GunSystem.Akimbo) {
+        // For gatling gun and akimbo, start continuous firing
+        console.log("Starting continuous firing");
         currentGun.startFiring();
       } else {
         // For other guns (pistol, sniper), just fire once
@@ -694,9 +707,9 @@
       if (currentGun instanceof GunSystem.Bazooka) {
         // For bazooka, update mouse state
         currentGun.isMouseDown = false;
-      } else if (currentGun instanceof GunSystem.GatlingGun) {
-        // For gatling gun, stop continuous firing
-        console.log("Stopping gatling gun firing");
+      } else if (currentGun instanceof GunSystem.GatlingGun || currentGun instanceof GunSystem.Akimbo) {
+        // For gatling gun and akimbo, stop continuous firing
+        console.log("Stopping continuous firing");
         currentGun.stopFiring();
       }
       // No action needed for single-shot weapons
@@ -1092,6 +1105,9 @@
         case 'translocator':
           currentGun = new GunSystem.TranslocatorGun(scene, camera);
           break;
+        case 'akimbo':
+          currentGun = new GunSystem.Akimbo(scene, camera);
+          break;
         default:
           currentGun = new GunSystem.Pistol(scene, camera); // Default to pistol
       }
@@ -1291,6 +1307,80 @@
       // Otherwise use the original method
       return originalCheckBulletCollisions.call(this, bullet, walls);
     };
+
+    // Function to create a skybox with a panoramic 360° image
+    function createSkybox(skyboxIndex = 0) {
+      // Remove any existing skybox
+      const existingSkybox = scene.getObjectByName('skybox');
+      if (existingSkybox) {
+        scene.remove(existingSkybox);
+      }
+
+      // Choose which method to use:
+      // 1. Cube map (six separate images)
+      // 2. Equirectangular panorama (single image)
+      const useEquirectangular = true;
+
+      // Array of panoramic images to choose from
+      const panoramicImages = [
+        'https://threejsfundamentals.org/threejs/resources/images/equirectangularmaps/tears_of_steel_bridge_2k.jpg',
+        'https://cdn.jsdelivr.net/gh/mrdoob/three.js@master/examples/textures/2294472375_24a3b8ef46_o.jpg',
+        'https://cdn.jsdelivr.net/gh/mrdoob/three.js@master/examples/textures/equirectangular/spruit_sunrise_2k.hdr.jpg'
+      ];
+
+      // Get the selected image URL
+      const imageUrl = panoramicImages[skyboxIndex % panoramicImages.length];
+      console.log(`Loading skybox: ${imageUrl}`);
+
+      if (useEquirectangular) {
+        // Method 2: Using a single equirectangular panoramic image
+        const textureLoader = new THREE.TextureLoader();
+        textureLoader.load(
+          // URL of the panoramic image
+          imageUrl,
+          // onLoad callback
+          function (texture) {
+            // Create a sphere geometry for the panoramic view
+            const sphereGeometry = new THREE.SphereGeometry(450, 60, 40);
+            // Flip the geometry inside out
+            sphereGeometry.scale(-1, 1, 1);
+
+            // Create material with the loaded texture
+            const sphereMaterial = new THREE.MeshBasicMaterial({
+              map: texture
+            });
+
+            // Create mesh and add to scene
+            const skybox = new THREE.Mesh(sphereGeometry, sphereMaterial);
+            skybox.name = 'skybox'; // Name it for easy removal later
+            scene.add(skybox);
+
+            // Adjust fog to work better with the skybox
+            scene.fog = new THREE.Fog(0x87ceeb, 100, 750);
+          }
+        );
+      } else {
+        // Method 1: Using a cube texture (six separate images)
+        const loader = new THREE.CubeTextureLoader();
+        const texture = loader.load([
+          'https://threejs.org/examples/textures/cube/skybox/px.jpg', // positive x
+          'https://threejs.org/examples/textures/cube/skybox/nx.jpg', // negative x
+          'https://threejs.org/examples/textures/cube/skybox/py.jpg', // positive y
+          'https://threejs.org/examples/textures/cube/skybox/ny.jpg', // negative y
+          'https://threejs.org/examples/textures/cube/skybox/pz.jpg', // positive z
+          'https://threejs.org/examples/textures/cube/skybox/nz.jpg'  // negative z
+        ]);
+
+        // Set the scene background to the loaded cube texture
+        scene.background = texture;
+
+        // Adjust fog to work better with the skybox
+        scene.fog = new THREE.Fog(0x87ceeb, 100, 750);
+      }
+    }
+
+    // Track current skybox index
+    let currentSkyboxIndex = 0;
   </script>
 </body>
 
