@@ -1,0 +1,151 @@
+# FPS Game Refactoring Plan
+
+## Introduction and Context
+
+This document outlines a step-by-step plan for refactoring the FPS game codebase. The primary goal is to reorganize the code structure without changing any functionality. This restructuring will make it easier to implement multiplayer features in the future.
+
+### Important Guidelines
+
+1. **No Functional Changes**: This refactoring should not add new features or remove existing ones. The game should behave exactly the same after each step.
+
+2. **Incremental Approach**: Each step should be implemented and tested individually before moving to the next one. This allows for continuous verification that the game still functions correctly.
+
+3. **Verification**: After each step, run and test the game to ensure nothing has broken.
+
+4. **Future-Proofing**: While not adding multiplayer functionality now, the structure should accommodate future multiplayer implementation.
+
+5. **Code Organization**: The primary goal is to break large files into smaller, more manageable modules that have clear responsibilities.
+
+Follow this plan sequentially, and only proceed to the next step when the current one is working correctly.
+
+# Step-by-Step Refactoring Guide for FPS Game
+
+## Phase 1: Initial Structure and Style Extraction
+
+### Step 1: Create a Basic Directory Structure
+1. Create the following folders:
+   - `src/` - for all JavaScript code
+   - `src/guns/` - for individual gun classes
+   - `src/enemies/` - for enemy-related code
+   - `src/animals/` - for animal-related code
+   - `src/buildings/` - for building-related code
+   - `src/utils/` - for utility functions and classes
+   - `src/effects/` - for visual and audio effects
+   - `assets/` - for textures, sounds, etc.
+   - `styles/` - for CSS files
+
+### Step 2: Extract CSS from index.html
+1. Create `styles/main.css`
+2. Move all CSS from `<style>` tags in index.html to this file
+3. Add a link to the stylesheet in index.html
+
+## Phase 2: Modularize the Gun System
+
+### Step 3: Create Base Gun Class File
+1. Create `src/guns/Gun.js` with the base `Gun` class
+2. Extract the base `Gun` class from guns.js 
+3. Add proper ES module exports
+
+### Step 4: Extract Individual Gun Classes
+1. Create a separate file for each gun class in the `src/guns/` directory:
+   - `src/guns/GatlingGun.js`
+   - `src/guns/Pistol.js`
+   - `src/guns/SniperRifle.js`
+   - `src/guns/Bazooka.js`
+   - `src/guns/TranslocatorGun.js`
+   - `src/guns/Akimbo.js`
+2. Each file should import the base `Gun` class
+3. Move each gun's specific code to its respective file
+4. Add proper ES module exports
+
+### Step 5: Create Gun Effects Utility
+1. Create `src/utils/GunEffects.js`
+2. Extract common effect methods (muzzle flash, impact, explosion, etc.)
+3. Make these accessible to all gun classes
+
+## Phase 3: Modularize Entities
+
+### Step 6: Create Animal Base Class
+1. Create `src/animals/Animal.js`
+2. Extract the base `Animal` class from animals.js
+3. Add proper ES module exports
+
+### Step 7: Create Enemy Base Class
+1. Create `src/enemies/Enemy.js` that extends `Animal`
+2. Extract the `Enemy` class from enemies.js
+3. Add proper ES module exports
+
+### Step 8: Extract Individual Enemy Types (if applicable)
+1. Create separate files for each enemy type in `src/enemies/`
+2. Each should import and extend the base `Enemy` class
+
+### Step 9: Extract Building System
+1. Create `src/buildings/Building.js`
+2. Extract building-related code from buildings.js
+3. If there are multiple building types, create separate files for each
+
+## Phase 4: Create Utility and Effects Modules
+
+### Step 10: Extract Audio System
+1. Create `src/utils/AudioManager.js`
+2. Consolidate all audio creation and playback code
+3. Make it accessible to guns, enemies, etc.
+
+### Step 11: Extract Particle Effects System
+1. Create `src/effects/ParticleEffects.js`
+2. Move all particle creation and animation code
+3. Create specialized effect files if needed (explosions, impacts, etc.)
+
+### Step 12: Create Physics Utility
+1. Create `src/utils/Physics.js`
+2. Extract collision detection, raycasting, and physics calculations
+
+## Phase 5: Prepare Game Core
+
+### Step 13: Create Game Manager
+1. Create `src/GameManager.js`
+2. Extract core game loop and state management
+3. Prepare to handle multiple players
+
+### Step 14: Create Player Class
+1. Create `src/Player.js`
+2. Extract player-specific logic from index.html
+3. Design with multiplayer in mind (position, rotation, input, etc.)
+
+### Step 15: Create Input Manager
+1. Create `src/utils/InputManager.js`
+2. Extract all input handling (keyboard, mouse)
+3. Design to support multiple input sources
+
+## Phase 6: Main Entry Point and Module Loading
+
+### Step 16: Create Main Game Script
+1. Create `src/main.js`
+2. Import and initialize all required modules
+3. Replace inline script in index.html with a single script tag for main.js
+
+### Step 17: Update index.html
+1. Clean up index.html to only contain necessary HTML elements
+2. Add script tag for the bundled/main JavaScript file
+3. Ensure all paths to assets are correct
+
+## Phase 7: Asset Management
+
+### Step 18: Organize Assets
+1. Move textures, 3D models, and sounds to appropriate folders in `assets/`
+2. Update all references to assets in the code
+
+### Step 19: Create Asset Loader
+1. Create `src/utils/AssetLoader.js`
+2. Implement a system to load assets asynchronously
+3. Add loading screen or progress indicator
+
+## Next Steps After Refactoring
+
+Once the refactoring is complete, we'll be better positioned to implement multiplayer features:
+
+1. Implement a network manager for client-server communication
+2. Add serialization for game state
+3. Create lobby and matchmaking systems
+4. Implement server-side logic for game rules and anti-cheat
+5. Add multiplayer UI elements (scoreboard, player list, etc.) 
