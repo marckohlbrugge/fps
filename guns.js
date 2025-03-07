@@ -731,6 +731,74 @@ class Gun {
 
     shake();
   }
+
+  // Create muzzle flash effect
+  createMuzzleFlash(position, direction) {
+    // Create a point light for the muzzle flash
+    const flashLight = new THREE.PointLight(0xffff00, 2, 5);
+    flashLight.position.copy(position);
+    this.scene.add(flashLight);
+
+    // Create a small mesh for the visual flash
+    const flashGeometry = new THREE.SphereGeometry(0.05, 8, 8);
+    const flashMaterial = new THREE.MeshBasicMaterial({
+      color: 0xffff00,
+      transparent: true,
+      opacity: 0.8
+    });
+    const flash = new THREE.Mesh(flashGeometry, flashMaterial);
+    flash.position.copy(position);
+    flash.userData.createdAt = performance.now();
+    flash.userData.lifespan = 50; // Very short lifespan
+
+    // Add to scene
+    this.scene.add(flash);
+
+    // Store in global particles array if it exists
+    if (!window.particles) window.particles = [];
+    window.particles.push(flash);
+
+    // Remove light after a short delay
+    setTimeout(() => {
+      this.scene.remove(flashLight);
+    }, 50);
+  }
+
+  // Create impact mark (bullet hole)
+  createImpactMark(position, normal, hitObject) {
+    // Skip if no hit object or if it's not a wall
+    if (!hitObject || hitObject.userData.isAnimal) return;
+
+    // Create a small decal for the bullet hole
+    const markSize = 0.1;
+    const markGeometry = new THREE.CircleGeometry(markSize, 8);
+    const markMaterial = new THREE.MeshBasicMaterial({
+      color: 0x111111,
+      transparent: true,
+      opacity: 0.8,
+      depthWrite: false
+    });
+
+    const mark = new THREE.Mesh(markGeometry, markMaterial);
+
+    // Position the mark slightly above the surface to prevent z-fighting
+    const offset = 0.01;
+    mark.position.copy(position).addScaledVector(normal, offset);
+
+    // Orient the mark to face the normal direction
+    mark.lookAt(position.clone().add(normal));
+
+    // Store reference to parent object for cleanup
+    mark.userData.parentObject = hitObject;
+    mark.userData.createdAt = performance.now();
+    mark.userData.lifespan = 30000; // 30 seconds
+
+    this.scene.add(mark);
+
+    // Add to global impact markers array for cleanup
+    if (!window.impactMarkers) window.impactMarkers = [];
+    window.impactMarkers.push(mark);
+  }
 }
 
 // Gatling Gun class
@@ -861,45 +929,163 @@ class GatlingGun extends Gun {
   }
 
   shoot() {
+    // Only shoot if we can
+    if (!this.canShoot) return;
+
     // Play shooting sound
     this.playSound('shoot');
 
     // Create bullet geometry
-    const bulletGeometry = new THREE.SphereGeometry(0.05, 8, 8);
-    const bulletMaterial = new THREE.MeshBasicMaterial({ color: 0xffff00 });
+    const bulletGeometry = new THREE.SphereGeometry(0.03, 8, 8);
+    const bulletMaterial = new THREE.MeshBasicMaterial({ color: 0xffff00 }); // Bright yellow bullets
     const bullet = new THREE.Mesh(bulletGeometry, bulletMaterial);
 
-    // Get current barrel position (the one at the top)
-    const barrelTip = new THREE.Vector3(0, 0.08, 0.5);
+    // Get current top barrel position
+    const barrelIndex = Math.floor(this.barrels.rotation.z / (Math.PI * 2 / 6)) % 6;
+    const barrelOffset = new THREE.Vector3(
+      Math.sin(barrelIndex * Math.PI * 2 / 6) * 0.08,
+      Math.cos(barrelIndex * Math.PI * 2 / 6) * 0.08,
+      0.25
+    );
+
+    // Transform barrel offset to world coordinates
+    const barrelTip = barrelOffset.clone();
+    this.barrels.updateMatrixWorld(true);
     barrelTip.applyMatrix4(this.barrels.matrixWorld);
 
-    // Set bullet position to start from the current barrel
+    // Set bullet position to start from the barrel
     bullet.position.copy(barrelTip);
 
-    // Set bullet direction based on camera direction
-    const bulletDirection = new THREE.Vector3(0, 0, -1);
+    // Set bullet direction based on camera direction with slight spread
+    const spread = 0.02; // Reduced spread for better accuracy
+    const bulletDirection = new THREE.Vector3(
+      (Math.random() - 0.5) * spread,
+      (Math.random() - 0.5) * spread,
+      -1
+    ).normalize();
     bulletDirection.applyQuaternion(this.camera.quaternion);
     bullet.userData.direction = bulletDirection;
-    bullet.userData.velocity = 50; // Bullet speed
+    bullet.userData.velocity = 100; // Fast bullet
     bullet.userData.alive = true;
     bullet.userData.createdAt = performance.now();
-    bullet.userData.lifespan = 2000; // Bullet lifespan in milliseconds
-    bullet.userData.damage = this.damage; // Set bullet damage
+    bullet.userData.lifespan = 2000; // 2 seconds
+    bullet.userData.damage = this.damage;
 
     // Add bullet to scene and bullets array
     this.scene.add(bullet);
     this.bullets.push(bullet);
 
-    // Add bullet trail
-    const trailGeometry = new THREE.BufferGeometry();
-    const trailMaterial = new THREE.LineBasicMaterial({ color: 0xffff00, opacity: 0.5, transparent: true });
+    // Add enhanced bullet trail
+    this.createEnhancedBulletTrail(bullet, barrelTip);
 
-    const trailPositions = new Float32Array(2 * 3); // 2 points, 3 coordinates each
-    trailGeometry.setAttribute('position', new THREE.BufferAttribute(trailPositions, 3));
+    // Add muzzle flash
+    this.createMuzzleFlash(barrelTip, bulletDirection);
+
+    // Set shooting cooldown based on rotation speed
+    const speedFactor = Math.min(1, Math.max(0, (this.rotationSpeed - this.minFireSpeed) / (this.optimalFireSpeed - this.minFireSpeed)));
+    const currentCooldown = this.shootCooldown * (1 - speedFactor * 0.7); // Up to 70% faster at optimal speed
+
+    this.canShoot = false;
+    setTimeout(() => {
+      this.canShoot = true;
+    }, currentCooldown * 1000);
+  }
+
+  createEnhancedBulletTrail(bullet, startPosition) {
+    // Create a more visible trail using a line
+    const trailGeometry = new THREE.BufferGeometry();
+    const trailMaterial = new THREE.LineDashedMaterial({
+      color: 0xffff00,
+      dashSize: 0.05,
+      gapSize: 0.05,
+      opacity: 0.7,
+      transparent: true
+    });
+
+    // Create trail with multiple segments for better visibility
+    const segmentCount = 10;
+    const positions = new Float32Array((segmentCount + 1) * 3);
+
+    // Set all positions to start at the barrel
+    for (let i = 0; i <= segmentCount; i++) {
+      positions[i * 3] = startPosition.x;
+      positions[i * 3 + 1] = startPosition.y;
+      positions[i * 3 + 2] = startPosition.z;
+    }
+
+    trailGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
 
     const trail = new THREE.Line(trailGeometry, trailMaterial);
-    bullet.userData.trail = trail;
+    trail.computeLineDistances(); // Required for dashed lines
+
     this.scene.add(trail);
+
+    // Store trail data in bullet
+    bullet.userData.trail = trail;
+    bullet.userData.trailPositions = positions;
+    bullet.userData.trailStartPosition = startPosition.clone();
+    bullet.userData.trailSegments = segmentCount;
+
+    return trail;
+  }
+
+  // Override updateBullets to handle the enhanced trails
+  updateBullets(delta, walls) {
+    const currentTime = performance.now();
+
+    // Update each bullet
+    for (let i = this.bullets.length - 1; i >= 0; i--) {
+      const bullet = this.bullets[i];
+
+      // Check if bullet should be removed
+      if (currentTime - bullet.userData.createdAt > bullet.userData.lifespan || !bullet.userData.alive) {
+        // Remove bullet and trail from scene
+        this.scene.remove(bullet);
+        if (bullet.userData.trail) {
+          this.scene.remove(bullet.userData.trail);
+        }
+        this.bullets.splice(i, 1);
+        continue;
+      }
+
+      // Move bullet
+      const bulletSpeed = bullet.userData.velocity * delta;
+      bullet.position.add(bullet.userData.direction.clone().multiplyScalar(bulletSpeed));
+
+      // Update enhanced trail if it exists
+      if (bullet.userData.trail && bullet.userData.trailPositions) {
+        this.updateEnhancedTrail(bullet, delta);
+      }
+
+      // Check for bullet collisions with walls
+      this.checkBulletCollisions(bullet, walls);
+    }
+  }
+
+  updateEnhancedTrail(bullet, delta) {
+    const positions = bullet.userData.trailPositions;
+    const segmentCount = bullet.userData.trailSegments;
+
+    // Update trail positions - create a trail that stretches from barrel to current position
+    const startPos = bullet.userData.trailStartPosition;
+    const endPos = bullet.position;
+
+    for (let i = 0; i <= segmentCount; i++) {
+      const t = i / segmentCount;
+
+      // Interpolate between start and end positions
+      positions[i * 3] = startPos.x + (endPos.x - startPos.x) * t;
+      positions[i * 3 + 1] = startPos.y + (endPos.y - startPos.y) * t;
+      positions[i * 3 + 2] = startPos.z + (endPos.z - startPos.z) * t;
+    }
+
+    // Update the trail geometry
+    bullet.userData.trail.geometry.attributes.position.needsUpdate = true;
+    bullet.userData.trail.computeLineDistances(); // Required for dashed lines
+
+    // Fade out the trail over time
+    const age = (performance.now() - bullet.userData.createdAt) / bullet.userData.lifespan;
+    bullet.userData.trail.material.opacity = 0.7 * (1 - age);
   }
 
   // Add a custom shooting sound for the Gatling gun
@@ -1112,6 +1298,7 @@ class SniperRifle extends Gun {
     this.zoomTransitionSpeed = 5; // Reduced for smoother transition
     this.targetFOV = this.originalFOV; // Current target FOV
     this.zoomEventAttached = false; // Track if zoom events are attached
+    this.keyZoomActive = false; // Track if key zoom is active
   }
 
   create() {
@@ -1124,13 +1311,34 @@ class SniperRifle extends Gun {
     const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
     this.mesh.add(body);
 
-    // Create scope - make it more visible
+    // Add upper rail
+    const railGeometry = new THREE.BoxGeometry(0.03, 0.02, 0.5);
+    const railMaterial = new THREE.MeshLambertMaterial({ color: 0x111111 });
+    const rail = new THREE.Mesh(railGeometry, railMaterial);
+    rail.position.set(0, 0.05, 0);
+    this.mesh.add(rail);
+
+    // Create scope - make it more visible and higher
     const scopeGeometry = new THREE.CylinderGeometry(0.04, 0.04, 0.15, 16);
     const scopeMaterial = new THREE.MeshLambertMaterial({ color: 0x111111 });
     const scope = new THREE.Mesh(scopeGeometry, scopeMaterial);
     scope.rotation.x = Math.PI / 2;
-    scope.position.set(0, 0.06, 0.1);
+    scope.position.set(0, 0.09, 0.1); // Raised higher
     this.mesh.add(scope);
+
+    // Add scope mounting brackets
+    const bracketGeometry = new THREE.BoxGeometry(0.02, 0.04, 0.02);
+    const bracketMaterial = new THREE.MeshLambertMaterial({ color: 0x333333 });
+
+    // Front bracket
+    const frontBracket = new THREE.Mesh(bracketGeometry, bracketMaterial);
+    frontBracket.position.set(0, 0.07, 0.03);
+    this.mesh.add(frontBracket);
+
+    // Rear bracket
+    const rearBracket = new THREE.Mesh(bracketGeometry, bracketMaterial);
+    rearBracket.position.set(0, 0.07, 0.17);
+    this.mesh.add(rearBracket);
 
     // Add scope lens (reflective material)
     const lensGeometry = new THREE.CircleGeometry(0.03, 16);
@@ -1140,9 +1348,25 @@ class SniperRifle extends Gun {
       emissive: 0x222266
     });
     const lens = new THREE.Mesh(lensGeometry, lensMaterial);
-    lens.position.set(0, 0.06, 0.18);
+    lens.position.set(0, 0.09, 0.18);
     lens.rotation.y = Math.PI;
     this.mesh.add(lens);
+
+    // Add scope adjustment knobs
+    const knobGeometry = new THREE.CylinderGeometry(0.015, 0.015, 0.02, 8);
+    const knobMaterial = new THREE.MeshLambertMaterial({ color: 0x222222 });
+
+    // Vertical adjustment knob
+    const verticalKnob = new THREE.Mesh(knobGeometry, knobMaterial);
+    verticalKnob.rotation.z = Math.PI / 2;
+    verticalKnob.position.set(0, 0.09, 0.13);
+    this.mesh.add(verticalKnob);
+
+    // Horizontal adjustment knob
+    const horizontalKnob = new THREE.Mesh(knobGeometry, knobMaterial);
+    horizontalKnob.rotation.x = Math.PI / 2;
+    horizontalKnob.position.set(0.04, 0.09, 0.1);
+    this.mesh.add(horizontalKnob);
 
     // Create gun handle - make it more ergonomic
     const handleGeometry = new THREE.BoxGeometry(0.04, 0.15, 0.04);
@@ -1150,7 +1374,23 @@ class SniperRifle extends Gun {
     const handle = new THREE.Mesh(handleGeometry, handleMaterial);
     handle.position.y = -0.1;
     handle.position.z = 0.2;
+    handle.rotation.x = 0.2; // Slight angle for better ergonomics
     this.mesh.add(handle);
+
+    // Add trigger
+    const triggerGeometry = new THREE.BoxGeometry(0.02, 0.04, 0.01);
+    const triggerMaterial = new THREE.MeshLambertMaterial({ color: 0x111111 });
+    const trigger = new THREE.Mesh(triggerGeometry, triggerMaterial);
+    trigger.position.set(0, -0.05, 0.2);
+    this.mesh.add(trigger);
+
+    // Add trigger guard
+    const guardGeometry = new THREE.TorusGeometry(0.03, 0.005, 8, 16, Math.PI);
+    const guardMaterial = new THREE.MeshLambertMaterial({ color: 0x222222 });
+    const guard = new THREE.Mesh(guardGeometry, guardMaterial);
+    guard.rotation.x = Math.PI / 2;
+    guard.position.set(0, -0.07, 0.2);
+    this.mesh.add(guard);
 
     // Add stock
     const stockGeometry = new THREE.BoxGeometry(0.05, 0.1, 0.2);
@@ -1160,6 +1400,13 @@ class SniperRifle extends Gun {
     stock.position.y = -0.02;
     this.mesh.add(stock);
 
+    // Add stock cheek rest
+    const cheekRestGeometry = new THREE.BoxGeometry(0.05, 0.03, 0.15);
+    const cheekRestMaterial = new THREE.MeshLambertMaterial({ color: 0x8B4513 });
+    const cheekRest = new THREE.Mesh(cheekRestGeometry, cheekRestMaterial);
+    cheekRest.position.set(0, 0.05, 0.45);
+    this.mesh.add(cheekRest);
+
     // Add barrel
     const barrelGeometry = new THREE.CylinderGeometry(0.02, 0.02, 0.4, 8);
     const barrelMaterial = new THREE.MeshLambertMaterial({ color: 0x444444 });
@@ -1168,11 +1415,30 @@ class SniperRifle extends Gun {
     barrel.position.set(0, 0, -0.2);
     this.mesh.add(barrel);
 
+    // Add muzzle brake
+    const muzzleGeometry = new THREE.CylinderGeometry(0.03, 0.03, 0.08, 8);
+    const muzzleMaterial = new THREE.MeshLambertMaterial({ color: 0x333333 });
+    const muzzle = new THREE.Mesh(muzzleGeometry, muzzleMaterial);
+    muzzle.rotation.x = Math.PI / 2;
+    muzzle.position.set(0, 0, -0.4);
+    this.mesh.add(muzzle);
+
+    // Add muzzle brake vents
+    for (let i = 0; i < 6; i++) {
+      const ventGeometry = new THREE.BoxGeometry(0.06, 0.01, 0.01);
+      const ventMaterial = new THREE.MeshLambertMaterial({ color: 0x111111 });
+      const vent = new THREE.Mesh(ventGeometry, ventMaterial);
+      const angle = (i / 6) * Math.PI * 2;
+      vent.position.set(0, Math.sin(angle) * 0.03, -0.4 + Math.cos(angle) * 0.03);
+      vent.rotation.z = angle;
+      this.mesh.add(vent);
+    }
+
     // Position the gun in front of the camera
     this.mesh.position.set(0.3, -0.2, -0.5);
     this.camera.add(this.mesh);
 
-    // Attach right-click event for zooming
+    // Attach zoom events
     this.attachZoomEvent();
 
     return this.mesh;
@@ -1198,7 +1464,24 @@ class SniperRifle extends Gun {
 
     // Also handle when mouse leaves the window
     const onMouseLeave = () => {
-      if (this.isZoomed) {
+      if (this.isZoomed && !this.keyZoomActive) {
+        this.endZoom();
+      }
+    };
+
+    // Add keyboard event listeners for V key zooming
+    const onKeyDown = (event) => {
+      if (event.code === 'KeyV') {
+        console.log("V key pressed - starting zoom");
+        this.keyZoomActive = true;
+        this.startZoom();
+      }
+    };
+
+    const onKeyUp = (event) => {
+      if (event.code === 'KeyV') {
+        console.log("V key released - ending zoom");
+        this.keyZoomActive = false;
         this.endZoom();
       }
     };
@@ -1206,24 +1489,30 @@ class SniperRifle extends Gun {
     document.addEventListener('mousedown', onRightMouseDown);
     document.addEventListener('mouseup', onRightMouseUp);
     document.addEventListener('mouseleave', onMouseLeave);
+    document.addEventListener('keydown', onKeyDown);
+    document.addEventListener('keyup', onKeyUp);
 
     // Store the event listeners for cleanup
     this.zoomEventListeners = {
-      down: onRightMouseDown,
-      up: onRightMouseUp,
-      leave: onMouseLeave
+      mouseDown: onRightMouseDown,
+      mouseUp: onRightMouseUp,
+      mouseLeave: onMouseLeave,
+      keyDown: onKeyDown,
+      keyUp: onKeyUp
     };
 
     this.zoomEventAttached = true;
-    console.log("Zoom events attached to sniper rifle");
+    console.log("Zoom events attached to sniper rifle (including V key)");
   }
 
   cleanup() {
     // Remove zoom event listeners when switching weapons
     if (this.zoomEventAttached && this.zoomEventListeners) {
-      document.removeEventListener('mousedown', this.zoomEventListeners.down);
-      document.removeEventListener('mouseup', this.zoomEventListeners.up);
-      document.removeEventListener('mouseleave', this.zoomEventListeners.leave);
+      document.removeEventListener('mousedown', this.zoomEventListeners.mouseDown);
+      document.removeEventListener('mouseup', this.zoomEventListeners.mouseUp);
+      document.removeEventListener('mouseleave', this.zoomEventListeners.mouseLeave);
+      document.removeEventListener('keydown', this.zoomEventListeners.keyDown);
+      document.removeEventListener('keyup', this.zoomEventListeners.keyUp);
       this.zoomEventAttached = false;
       console.log("Zoom events removed from sniper rifle");
     }
@@ -1255,7 +1544,14 @@ class SniperRifle extends Gun {
   }
 
   endZoom() {
-    if (!this.isZoomed) return; // Not zoomed
+    // Don't end zoom if key is still active
+    if (!this.isZoomed) return;
+
+    // If key zoom is active, don't end zoom
+    if (this.keyZoomActive) {
+      console.log("Not ending zoom because V key is still active");
+      return;
+    }
 
     this.isZoomed = false;
     this.targetFOV = this.originalFOV;
@@ -1289,8 +1585,6 @@ class SniperRifle extends Gun {
 
       // Update the camera projection matrix
       this.camera.updateProjectionMatrix();
-
-      console.log("Updating FOV:", this.camera.fov, "Target:", this.targetFOV);
     }
   }
 
@@ -1338,9 +1632,6 @@ class SniperRifle extends Gun {
     const trail = new THREE.Line(trailGeometry, trailMaterial);
     bullet.userData.trail = trail;
     this.scene.add(trail);
-
-    // Add muzzle flash
-    this.createMuzzleFlash(barrelTip, bulletDirection);
 
     // Add recoil animation
     const originalPosition = this.mesh.position.clone();
@@ -1390,10 +1681,7 @@ class Bazooka extends Gun {
   constructor(scene, camera) {
     super(scene, camera);
     this.shootCooldown = 2.0; // Very slow fire rate
-    this.damage = 1000; // Extremely high damage - one-shot kills everything
-    this.explosionRadius = 5; // Large explosion radius
-    this.explosionForce = 20; // Strong explosion force
-    this.rocketSpeed = 40; // Slower than bullets but still fast
+    this.damage = 200; // High damage
     this.isMouseDown = false;
   }
 
@@ -1462,149 +1750,169 @@ class Bazooka extends Gun {
     // Play shooting sound
     this.playSound('shoot');
 
-    // Create rocket geometry
-    const rocketBodyGeometry = new THREE.CylinderGeometry(0.08, 0.08, 0.3, 8);
-    const rocketTipGeometry = new THREE.ConeGeometry(0.08, 0.15, 8);
-    const rocketMaterial = new THREE.MeshLambertMaterial({ color: 0x777777 });
-    const rocketTipMaterial = new THREE.MeshLambertMaterial({ color: 0xff0000 });
+    // Create rocket geometry - make it larger and more visible
+    const rocketGeometry = new THREE.CylinderGeometry(0.05, 0.1, 0.4, 8);
+    const rocketMaterial = new THREE.MeshBasicMaterial({ color: 0x333333 });
+    const rocket = new THREE.Mesh(rocketGeometry, rocketMaterial);
 
-    const rocketGroup = new THREE.Group();
+    // Add fins to the rocket
+    const finGeometry = new THREE.BoxGeometry(0.15, 0.02, 0.1);
+    const finMaterial = new THREE.MeshBasicMaterial({ color: 0x222222 });
 
-    const rocketBody = new THREE.Mesh(rocketBodyGeometry, rocketMaterial);
-    rocketBody.rotation.x = Math.PI / 2;
-    rocketGroup.add(rocketBody);
-
-    const rocketTip = new THREE.Mesh(rocketTipGeometry, rocketTipMaterial);
-    rocketTip.position.set(0, 0, 0.225);
-    rocketTip.rotation.x = Math.PI / 2;
-    rocketGroup.add(rocketTip);
-
-    // Add fins
-    const finGeometry = new THREE.BoxGeometry(0.05, 0.1, 0.02);
-    const finMaterial = new THREE.MeshLambertMaterial({ color: 0x555555 });
-
+    // Add 4 fins
     for (let i = 0; i < 4; i++) {
       const fin = new THREE.Mesh(finGeometry, finMaterial);
-      fin.position.set(
-        Math.sin(i * Math.PI / 2) * 0.08,
-        Math.cos(i * Math.PI / 2) * 0.08,
-        -0.1
-      );
-      fin.rotation.z = i * Math.PI / 2;
-      rocketGroup.add(fin);
+      fin.position.z = 0.15;
+      fin.rotation.y = (Math.PI / 2) * i;
+      rocket.add(fin);
     }
 
     // Get barrel position
-    const barrelTip = new THREE.Vector3(0, 0, 1);
-    this.mesh.updateMatrixWorld(true); // Make sure matrix is updated
+    const barrelTip = new THREE.Vector3(0, 0, -0.5);
+    this.mesh.updateMatrixWorld(true);
     barrelTip.applyMatrix4(this.mesh.matrixWorld);
 
     // Set rocket position to start from the barrel
-    rocketGroup.position.copy(barrelTip);
+    rocket.position.copy(barrelTip);
 
     // Set rocket direction based on camera direction
     const rocketDirection = new THREE.Vector3(0, 0, -1);
     rocketDirection.applyQuaternion(this.camera.quaternion);
-    rocketGroup.userData.direction = rocketDirection;
 
     // Rotate rocket to face direction of travel
-    rocketGroup.lookAt(rocketGroup.position.clone().add(rocketDirection));
+    rocket.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), rocketDirection);
 
     // Add rocket properties
-    rocketGroup.userData.velocity = this.rocketSpeed;
-    rocketGroup.userData.alive = true;
-    rocketGroup.userData.createdAt = performance.now();
-    rocketGroup.userData.lifespan = 10000; // 10 seconds
-    rocketGroup.userData.damage = this.damage;
-    rocketGroup.userData.isRocket = true;
-    rocketGroup.userData.explosionRadius = this.explosionRadius;
-    rocketGroup.userData.explosionForce = this.explosionForce;
+    rocket.userData.direction = rocketDirection;
+    rocket.userData.velocity = 40; // Slower than bullets but still fast
+    rocket.userData.alive = true;
+    rocket.userData.createdAt = performance.now();
+    rocket.userData.lifespan = 10000; // 10 seconds
+    rocket.userData.damage = this.damage;
+    rocket.userData.isRocket = true;
+    rocket.userData.explosionRadius = 5;
+    rocket.userData.explosionForce = 20;
 
     // Add rocket trail
-    this.addRocketTrail(rocketGroup);
+    this.createRocketTrail(rocket);
 
-    // Add rocket to scene and bullets array
-    this.scene.add(rocketGroup);
-    this.bullets.push(rocketGroup);
+    // Add to scene and bullets array
+    this.scene.add(rocket);
+    this.bullets.push(rocket);
 
-    // Add strong recoil animation
+    // Add recoil animation
     const originalPosition = this.mesh.position.clone();
-    this.mesh.position.z += 0.3; // Strong recoil
+    this.mesh.position.z += 0.2; // Strong recoil
 
     // Return to original position gradually
     setTimeout(() => {
-      this.mesh.position.z = originalPosition.z + 0.2;
-      setTimeout(() => {
-        this.mesh.position.z = originalPosition.z + 0.1;
-        setTimeout(() => {
-          this.mesh.position.copy(originalPosition);
-        }, 100);
-      }, 100);
-    }, 100);
+      this.mesh.position.copy(originalPosition);
+    }, 300);
 
     // Set shooting cooldown
     this.canShoot = false;
     setTimeout(() => {
       this.canShoot = true;
       console.log("Bazooka ready to fire again");
-      // Auto-shoot if still holding mouse
-      if (this.isMouseDown) {
-        this.shoot();
-      }
     }, this.shootCooldown * 1000);
   }
 
-  addRocketTrail(rocket) {
-    // Create particle system for rocket trail
-    const particleCount = 100;
-    const particles = new THREE.BufferGeometry();
+  createRocketTrail(rocket) {
+    // Create a more visible trail for the rocket
+    const trailGeometry = new THREE.BufferGeometry();
+    const trailMaterial = new THREE.PointsMaterial({
+      color: 0xff5500,
+      size: 0.5,
+      transparent: true,
+      opacity: 0.8,
+      blending: THREE.AdditiveBlending,
+      sizeAttenuation: true
+    });
 
+    // Create a trail with multiple points
+    const particleCount = 50;
     const positions = new Float32Array(particleCount * 3);
     const colors = new Float32Array(particleCount * 3);
 
-    // Initialize all particles at rocket position
-    const rocketPos = rocket.position.clone();
+    // Initialize all positions to rocket's position
     for (let i = 0; i < particleCount; i++) {
-      positions[i * 3] = rocketPos.x;
-      positions[i * 3 + 1] = rocketPos.y;
-      positions[i * 3 + 2] = rocketPos.z;
+      const i3 = i * 3;
+      positions[i3] = rocket.position.x;
+      positions[i3 + 1] = rocket.position.y;
+      positions[i3 + 2] = rocket.position.z;
 
-      // Color gradient from yellow to red to gray smoke
-      const ratio = i / particleCount;
-      if (ratio < 0.3) {
-        // Yellow/orange
-        colors[i * 3] = 1.0;
-        colors[i * 3 + 1] = 0.7 - ratio;
-        colors[i * 3 + 2] = 0.0;
-      } else {
-        // Fade to gray smoke
-        const smokeRatio = (ratio - 0.3) / 0.7;
-        colors[i * 3] = 0.7 - smokeRatio * 0.4;
-        colors[i * 3 + 1] = 0.7 - smokeRatio * 0.4;
-        colors[i * 3 + 2] = 0.7 - smokeRatio * 0.4;
-      }
+      // Color gradient from yellow to red
+      const t = i / particleCount;
+      colors[i3] = 1.0; // R
+      colors[i3 + 1] = 0.5 * (1 - t); // G
+      colors[i3 + 2] = 0.0; // B
     }
 
-    particles.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    particles.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    trailGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    trailGeometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
 
-    const particleMaterial = new THREE.PointsMaterial({
-      size: 0.1,
-      vertexColors: true,
-      transparent: true,
-      opacity: 0.8
-    });
+    const trail = new THREE.Points(trailGeometry, trailMaterial);
 
-    const trail = new THREE.Points(particles, particleMaterial);
-    this.scene.add(trail);
-
-    // Store trail and its data in rocket
+    // Store trail data in rocket
     rocket.userData.trail = trail;
     rocket.userData.trailPositions = positions;
     rocket.userData.trailColors = colors;
-    rocket.userData.trailIndex = 0;
     rocket.userData.trailMaxParticles = particleCount;
-    rocket.userData.lastTrailUpdateTime = performance.now();
+
+    this.scene.add(trail);
+
+    // Add smoke particles that emit continuously
+    this.createRocketSmokeEmitter(rocket);
+  }
+
+  createRocketSmokeEmitter(rocket) {
+    // Create a function to emit smoke particles
+    rocket.userData.emitSmoke = () => {
+      if (!rocket.userData.alive) return;
+
+      // Create a smoke particle
+      const smokeGeometry = new THREE.BufferGeometry();
+      const smokePositions = new Float32Array(3);
+      smokePositions[0] = rocket.position.x;
+      smokePositions[1] = rocket.position.y;
+      smokePositions[2] = rocket.position.z;
+
+      smokeGeometry.setAttribute('position', new THREE.BufferAttribute(smokePositions, 3));
+
+      const smokeMaterial = new THREE.PointsMaterial({
+        color: 0x888888,
+        size: 0.5 + Math.random() * 0.5,
+        transparent: true,
+        opacity: 0.5,
+        sizeAttenuation: true
+      });
+
+      const smoke = new THREE.Points(smokeGeometry, smokeMaterial);
+      smoke.userData.createdAt = performance.now();
+      smoke.userData.lifespan = 1000; // 1 second
+      smoke.userData.isSmoke = true;
+
+      // Add slight random velocity
+      smoke.userData.velocity = new THREE.Vector3(
+        (Math.random() - 0.5) * 0.5,
+        (Math.random() - 0.5) * 0.5,
+        (Math.random() - 0.5) * 0.5
+      );
+
+      this.scene.add(smoke);
+
+      // Add to global particles array
+      if (!window.particles) window.particles = [];
+      window.particles.push(smoke);
+
+      // Schedule next smoke emission
+      if (rocket.userData.alive) {
+        setTimeout(rocket.userData.emitSmoke, 50);
+      }
+    };
+
+    // Start emitting smoke
+    rocket.userData.emitSmoke();
   }
 
   updateRocketTrail(rocket, delta) {
@@ -1656,27 +1964,21 @@ class Bazooka extends Gun {
   }
 
   createExplosion(position, radius, force) {
-    // Create explosion light
-    const explosionLight = new THREE.PointLight(0xff7700, 2, radius * 3);
+    // Create explosion light with shorter duration
+    const explosionLight = new THREE.PointLight(0xff7700, 5, radius * 3);
     explosionLight.position.copy(position);
     this.scene.add(explosionLight);
 
-    // Check if this is a ground explosion
-    const isGroundExplosion = position.y < 0.5;
-
-    // Create dirt explosion if hitting ground
-    if (isGroundExplosion) {
-      this.createDirtExplosion(position, radius);
-      // Move explosion position slightly up for better visuals
-      position.y = 0.5;
-    }
+    // Remove light after a short delay (300ms instead of potentially staying forever)
+    setTimeout(() => {
+      this.scene.remove(explosionLight);
+    }, 300);
 
     // Create explosion particles
+    const particleCount = 200; // More particles for better visibility
     const explosionGeometry = new THREE.BufferGeometry();
-    const explosionTexture = this.createExplosionTexture();
 
     // Create particles in a sphere
-    const particleCount = 100;
     const positions = new Float32Array(particleCount * 3);
     const colors = new Float32Array(particleCount * 3);
     const sizes = new Float32Array(particleCount);
@@ -1685,16 +1987,16 @@ class Bazooka extends Gun {
       const i3 = i * 3;
 
       // Random position in sphere
-      const radius = Math.random() * 0.5;
+      const particleRadius = Math.random() * radius;
       const theta = Math.random() * Math.PI * 2;
       const phi = Math.random() * Math.PI;
 
-      positions[i3] = position.x + radius * Math.sin(phi) * Math.cos(theta);
-      positions[i3 + 1] = position.y + radius * Math.sin(phi) * Math.sin(theta);
-      positions[i3 + 2] = position.z + radius * Math.cos(phi);
+      positions[i3] = position.x + particleRadius * Math.sin(phi) * Math.cos(theta);
+      positions[i3 + 1] = position.y + particleRadius * Math.sin(phi) * Math.sin(theta);
+      positions[i3 + 2] = position.z + particleRadius * Math.cos(phi);
 
       // For ground explosions, keep particles above ground
-      if (isGroundExplosion && positions[i3 + 1] < 0.05) {
+      if (positions[i3 + 1] < 0.05) {
         positions[i3 + 1] = 0.05 + Math.random() * 0.1;
       }
 
@@ -1705,35 +2007,131 @@ class Bazooka extends Gun {
       colors[i3 + 2] = colorFactor < 0.3 ? 0.5 - colorFactor : 0; // B
 
       // Random sizes
-      sizes[i] = 2 + Math.random() * 3;
+      sizes[i] = 3 + Math.random() * 5; // Larger particles
     }
 
     explosionGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     explosionGeometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
     explosionGeometry.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
 
-    // Rest of the explosion code remains the same...
+    // Create particle material with custom texture
+    const explosionMaterial = new THREE.PointsMaterial({
+      size: 1,
+      transparent: true,
+      vertexColors: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      sizeAttenuation: true
+    });
+
+    // Create explosion mesh
+    const explosion = new THREE.Points(explosionGeometry, explosionMaterial);
+    explosion.userData.createdAt = performance.now();
+    explosion.userData.lifespan = 800; // Shorter lifespan
+    explosion.userData.velocities = [];
+
+    // Add velocity to each particle
+    for (let i = 0; i < particleCount; i++) {
+      const i3 = i * 3;
+      const direction = new THREE.Vector3(
+        positions[i3] - position.x,
+        positions[i3 + 1] - position.y,
+        positions[i3 + 2] - position.z
+      ).normalize();
+
+      // Random speed
+      const speed = 2 + Math.random() * 5;
+      explosion.userData.velocities.push(direction.multiplyScalar(speed));
+    }
+
+    // Add to scene
+    this.scene.add(explosion);
+
+    // Add to global particles array for updating
+    if (!window.particles) window.particles = [];
+    window.particles.push(explosion);
+
+    // Apply explosion damage
+    this.applyExplosionDamage(position, radius, force);
+
+    // Play explosion sound
+    this.playSound('explosion');
+
+    // Create ground scorch mark if explosion is near ground
+    if (position.y < radius) {
+      this.createScorchMark(position, radius);
+    }
+
+    // Create smoke cloud that lingers
+    this.createSmokeCloud(position, radius);
   }
 
-  createExplosionTexture() {
-    const canvas = document.createElement('canvas');
-    canvas.width = 32;
-    canvas.height = 32;
+  createScorchMark(position, radius) {
+    // Create a circular scorch mark on the ground
+    const scorchGeometry = new THREE.CircleGeometry(radius * 0.7, 16);
+    const scorchMaterial = new THREE.MeshBasicMaterial({
+      color: 0x222222,
+      transparent: true,
+      opacity: 0.7,
+      depthWrite: false
+    });
 
-    const context = canvas.getContext('2d');
-    const gradient = context.createRadialGradient(16, 16, 0, 16, 16, 16);
-    gradient.addColorStop(0, 'rgba(255,255,255,1)');
-    gradient.addColorStop(0.2, 'rgba(255,255,128,1)');
-    gradient.addColorStop(0.4, 'rgba(255,128,0,1)');
-    gradient.addColorStop(0.6, 'rgba(255,0,0,1)');
-    gradient.addColorStop(1, 'rgba(0,0,0,0)');
+    const scorch = new THREE.Mesh(scorchGeometry, scorchMaterial);
+    scorch.rotation.x = -Math.PI / 2; // Flat on ground
+    scorch.position.set(position.x, 0.01, position.z); // Just above ground
 
-    context.fillStyle = gradient;
-    context.fillRect(0, 0, 32, 32);
+    scorch.userData.createdAt = performance.now();
+    scorch.userData.lifespan = 10000; // 10 seconds
+    scorch.userData.isGroundMark = true;
 
-    const texture = new THREE.Texture(canvas);
-    texture.needsUpdate = true;
-    return texture;
+    this.scene.add(scorch);
+
+    // Add to global particles array for updating
+    if (!window.particles) window.particles = [];
+    window.particles.push(scorch);
+  }
+
+  createSmokeCloud(position, radius) {
+    const smokeCount = 20;
+    const smokeGeometry = new THREE.BufferGeometry();
+    const smokePositions = new Float32Array(smokeCount * 3);
+    const smokeSizes = new Float32Array(smokeCount);
+
+    for (let i = 0; i < smokeCount; i++) {
+      const i3 = i * 3;
+      const smokeRadius = Math.random() * radius * 0.5;
+      const theta = Math.random() * Math.PI * 2;
+      const phi = Math.random() * Math.PI;
+
+      smokePositions[i3] = position.x + smokeRadius * Math.sin(phi) * Math.cos(theta);
+      smokePositions[i3 + 1] = position.y + smokeRadius * Math.sin(phi) * Math.sin(theta) + radius * 0.3;
+      smokePositions[i3 + 2] = position.z + smokeRadius * Math.cos(phi);
+
+      smokeSizes[i] = radius * (0.5 + Math.random() * 0.5);
+    }
+
+    smokeGeometry.setAttribute('position', new THREE.BufferAttribute(smokePositions, 3));
+    smokeGeometry.setAttribute('size', new THREE.BufferAttribute(smokeSizes, 1));
+
+    const smokeMaterial = new THREE.PointsMaterial({
+      color: 0x888888,
+      transparent: true,
+      opacity: 0.4,
+      size: 1,
+      sizeAttenuation: true,
+      depthWrite: false
+    });
+
+    const smoke = new THREE.Points(smokeGeometry, smokeMaterial);
+    smoke.userData.createdAt = performance.now();
+    smoke.userData.lifespan = 2000; // 2 seconds
+    smoke.userData.isSmoke = true;
+
+    this.scene.add(smoke);
+
+    // Add to global particles array
+    if (!window.particles) window.particles = [];
+    window.particles.push(smoke);
   }
 
   applyExplosionDamage(position, radius, force) {
@@ -1756,13 +2154,6 @@ class Bazooka extends Gun {
           const damage = this.damage * damageRatio;
 
           this.applyDamage(wall, damage);
-
-          // Apply force to wall (if it has physics)
-          if (wall.userData.applyForce) {
-            const direction = wallPos.clone().sub(position).normalize();
-            const forceAmount = force * damageRatio;
-            wall.userData.applyForce(direction, forceAmount);
-          }
         }
       }
     }
@@ -1782,75 +2173,9 @@ class Bazooka extends Gun {
           const damage = this.damage * damageRatio;
 
           bunny.takeDamage(damage);
-
-          // Apply force to bunny
-          if (!bunny.isDead) {
-            const direction = bunny.mesh.position.clone().sub(position).normalize();
-            direction.y = 0.5; // Add upward component
-
-            // Apply impulse to bunny
-            bunny.velocity.add(direction.multiplyScalar(force * damageRatio));
-          }
         }
       }
     }
-
-    // Apply camera shake if player is close
-    const distanceToPlayer = position.distanceTo(this.camera.position);
-    if (distanceToPlayer < radius * 2) {
-      const shakeAmount = (1 - distanceToPlayer / (radius * 2)) * 0.2;
-      this.shakeCamera(shakeAmount);
-    }
-  }
-
-  shakeCamera(intensity) {
-    // Don't shake if intensity is too low
-    if (intensity < 0.01) return;
-
-    const originalPosition = this.camera.position.clone();
-    const originalRotation = this.camera.rotation.clone();
-
-    const shakeDuration = 300; // Shorter duration for better responsiveness
-    const startTime = performance.now();
-
-    // Flag to track if we're currently shaking
-    if (!window.isShakingCamera) {
-      window.isShakingCamera = true;
-    } else {
-      // Already shaking, just increase intensity
-      return;
-    }
-
-    const shake = () => {
-      const elapsed = performance.now() - startTime;
-      const progress = elapsed / shakeDuration;
-
-      if (progress < 1) {
-        // Decreasing intensity over time
-        const currentIntensity = intensity * (1 - progress);
-
-        // Apply random offset to camera
-        this.camera.position.x = originalPosition.x + (Math.random() - 0.5) * currentIntensity;
-        this.camera.position.y = originalPosition.y + (Math.random() - 0.5) * currentIntensity;
-        this.camera.position.z = originalPosition.z + (Math.random() - 0.5) * currentIntensity;
-
-        // Apply slight rotation shake
-        this.camera.rotation.x = originalRotation.x + (Math.random() - 0.5) * currentIntensity * 0.1;
-        this.camera.rotation.y = originalRotation.y + (Math.random() - 0.5) * currentIntensity * 0.1;
-        this.camera.rotation.z = originalRotation.z + (Math.random() - 0.5) * currentIntensity * 0.1;
-
-        requestAnimationFrame(shake);
-      } else {
-        // Reset to original position
-        this.camera.position.copy(originalPosition);
-        this.camera.rotation.copy(originalRotation);
-
-        // Reset the shaking flag
-        window.isShakingCamera = false;
-      }
-    };
-
-    shake();
   }
 }
 

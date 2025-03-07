@@ -241,80 +241,77 @@
     }
 
     function onKeyDown(event) {
+      // Skip if we're typing in an input field
+      if (event.target.tagName === 'INPUT') return;
+
+      // Skip if the V key is pressed and we have a sniper rifle
+      // Let the sniper rifle handle it
+      if (event.code === 'KeyV' && currentGun instanceof GunSystem.SniperRifle) {
+        return;
+      }
+
       switch (event.code) {
-        case 'ArrowUp':
         case 'KeyW':
           moveForward = true;
           break;
-        case 'ArrowLeft':
         case 'KeyA':
           moveLeft = true;
           break;
-        case 'ArrowDown':
         case 'KeyS':
           moveBackward = true;
           break;
-        case 'ArrowRight':
         case 'KeyD':
           moveRight = true;
           break;
         case 'Space':
           if (canJump === true) {
-            velocity.y = jumpHeight;
-            isJumping = true;
+            velocity.y = Math.sqrt(jumpHeight * 2 * gravity);
             canJump = false;
-          } else if (currentGun.canShoot) {
-            // Also allow shooting with spacebar
-            currentGun.shoot();
+            isJumping = true;
           }
           break;
+        case 'Digit1':
+          switchWeapon('pistol');
+          break;
+        case 'Digit2':
+          switchWeapon('gatling');
+          break;
+        case 'Digit3':
+          switchWeapon('sniper');
+          break;
+        case 'Digit4':
+          switchWeapon('bazooka');
+          break;
         case 'KeyB':
-          // Toggle debug mode
           debugMode = !debugMode;
           toggleDebugMode();
           break;
-        case 'Digit1':
-          // Switch to pistol
-          if (!(currentGun instanceof GunSystem.Pistol)) {
-            switchWeapon('pistol');
-          }
-          break;
-        case 'Digit2':
-          // Switch to gatling gun
-          if (!(currentGun instanceof GunSystem.GatlingGun)) {
-            switchWeapon('gatling');
-          }
-          break;
-        case 'Digit3':
-          // Switch to sniper rifle
-          if (!(currentGun instanceof GunSystem.SniperRifle)) {
-            switchWeapon('sniper');
-          }
-          break;
-        case 'Digit4':
-          // Switch to bazooka
-          if (!(currentGun instanceof GunSystem.Bazooka)) {
-            switchWeapon('bazooka');
-          }
+        case 'KeyN':
+          addBunnies(5);
           break;
       }
     }
 
     function onKeyUp(event) {
+      // Skip if we're typing in an input field
+      if (event.target.tagName === 'INPUT') return;
+
+      // Skip if the V key is released and we have a sniper rifle
+      // Let the sniper rifle handle it
+      if (event.code === 'KeyV' && currentGun instanceof GunSystem.SniperRifle) {
+        return;
+      }
+
       switch (event.code) {
-        case 'ArrowUp':
         case 'KeyW':
           moveForward = false;
           break;
-        case 'ArrowLeft':
         case 'KeyA':
           moveLeft = false;
           break;
-        case 'ArrowDown':
         case 'KeyS':
           moveBackward = false;
           break;
-        case 'ArrowRight':
         case 'KeyD':
           moveRight = false;
           break;
@@ -645,44 +642,69 @@
 
         // Check if particle should be removed
         if (currentTime - particle.userData.createdAt > particle.userData.lifespan) {
+          // Remove particle from scene
           scene.remove(particle);
           window.particles.splice(i, 1);
           continue;
         }
 
-        // Skip blood pools and ground marks for movement (they stay in place)
-        if (particle.userData.isBloodPool || particle.userData.isGroundMark) {
-          // Just fade out over time
-          const age = (currentTime - particle.userData.createdAt) / particle.userData.lifespan;
-          if (age > 0.7) { // Start fading after 70% of lifespan
-            const fadeProgress = (age - 0.7) / 0.3; // Normalize to 0-1 for last 30%
-            particle.material.opacity = 0.7 * (1 - fadeProgress);
-          }
-          continue;
-        }
-
-        // Move particle
-        particle.position.add(particle.userData.velocity.clone().multiplyScalar(delta));
-
-        // Apply gravity
-        particle.userData.velocity.y -= 9.8 * delta;
-
-        // Special handling for dirt particles - bounce off ground
-        if (particle.userData.isDirt && particle.position.y < 0.05) {
-          particle.position.y = 0.05;
-          particle.userData.velocity.y = -particle.userData.velocity.y * 0.3; // Bounce with 30% energy
-          particle.userData.velocity.x *= 0.8; // Friction
-          particle.userData.velocity.z *= 0.8; // Friction
-
-          // If moving very slowly, just stop
-          if (Math.abs(particle.userData.velocity.y) < 0.5) {
-            particle.userData.velocity.set(0, 0, 0);
-          }
-        }
-
-        // Fade out
+        // Calculate age as a percentage of lifespan
         const age = (currentTime - particle.userData.createdAt) / particle.userData.lifespan;
-        particle.material.opacity = 1 - age;
+
+        // Fade out particles over time
+        if (particle.material && particle.material.opacity !== undefined) {
+          particle.material.opacity = 1 - age;
+        }
+
+        // Move particles with velocity
+        if (particle.userData.velocity) {
+          try {
+            // Use a safe approach to clone velocity
+            const velocity = new THREE.Vector3(
+              particle.userData.velocity.x,
+              particle.userData.velocity.y,
+              particle.userData.velocity.z
+            );
+
+            // Apply gravity to non-smoke particles
+            if (!particle.userData.isSmoke && !particle.userData.isGroundMark) {
+              velocity.y -= 9.8 * delta; // Apply gravity
+              particle.userData.velocity.y = velocity.y; // Update stored velocity
+            }
+
+            // Move particle
+            particle.position.add(velocity.multiplyScalar(delta));
+
+            // Bounce off ground
+            if (particle.position.y < 0.05 && velocity.y < 0) {
+              particle.position.y = 0.05;
+              particle.userData.velocity.y = -particle.userData.velocity.y * 0.4; // Dampen bounce
+            }
+          } catch (e) {
+            // If there's an error with velocity, just skip this particle
+            console.log("Error updating particle:", e);
+          }
+        }
+
+        // Special handling for explosion particles
+        if (particle.userData.velocities && particle.userData.velocities.length > 0) {
+          const positions = particle.geometry.attributes.position.array;
+
+          for (let j = 0; j < particle.userData.velocities.length; j++) {
+            const i3 = j * 3;
+            const vel = particle.userData.velocities[j];
+
+            // Move particle
+            positions[i3] += vel.x * delta;
+            positions[i3 + 1] += vel.y * delta;
+            positions[i3 + 2] += vel.z * delta;
+
+            // Apply gravity
+            vel.y -= 9.8 * delta;
+          }
+
+          particle.geometry.attributes.position.needsUpdate = true;
+        }
       }
     }
 
