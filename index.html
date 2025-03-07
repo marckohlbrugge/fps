@@ -233,7 +233,8 @@
     <p>Kill enemies to spawn more!</p>
     <p>Each kill spawns 2 new enemies</p>
     <p>Controls: WASD to move, Space to jump</p>
-    <p>1-4: Switch weapons, M: Spawn enemy</p>
+    <p>1-5: Switch weapons, M: Spawn enemy</p>
+    <p>5: Translocator - Become the bullet!</p>
   </div>
   <div id="game-over">
     <h1>GAME OVER</h1>
@@ -244,6 +245,13 @@
   <script>
     // Game variables
     let camera, scene, renderer, controls;
+
+    // Make camera and renderer globally accessible
+    window.camera = null;
+    window.renderer = null;
+    window.THREE = THREE; // Make THREE globally accessible
+    window.controls = null; // Make controls globally accessible
+
     let moveForward = false;
     let moveBackward = false;
     let moveLeft = false;
@@ -447,6 +455,9 @@
       camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
       camera.position.y = 1.6; // Approximate eye height
 
+      // Make camera globally accessible
+      window.camera = camera;
+
       // Now add camera to scene
       scene.add(camera);
 
@@ -473,6 +484,7 @@
 
       // Setup controls
       controls = new THREE.PointerLockControls(camera, document.body);
+      window.controls = controls; // Make controls globally accessible
 
       // Add event listeners for controls
       document.addEventListener('click', function () {
@@ -506,6 +518,9 @@
       renderer.shadowMap.enabled = true;
       document.body.appendChild(renderer.domElement);
 
+      // Make renderer globally accessible
+      window.renderer = renderer;
+
       // Handle window resize
       window.addEventListener('resize', onWindowResize);
 
@@ -528,9 +543,12 @@
     }
 
     function onWindowResize() {
-      camera.aspect = window.innerWidth / window.innerHeight;
-      camera.updateProjectionMatrix();
-      renderer.setSize(window.innerWidth, window.innerHeight);
+      // Update the active camera's aspect ratio
+      window.camera.aspect = window.innerWidth / window.innerHeight;
+      window.camera.updateProjectionMatrix();
+
+      // Update renderer size
+      window.renderer.setSize(window.innerWidth, window.innerHeight);
     }
 
     function onKeyDown(event) {
@@ -541,6 +559,15 @@
       // Let the sniper rifle handle it
       if (event.code === 'KeyV' && currentGun instanceof GunSystem.SniperRifle) {
         return;
+      }
+
+      // Skip all keyboard input if we're controlling a projectile with the Translocator
+      if (currentGun instanceof GunSystem.TranslocatorGun && currentGun.isControllingProjectile) {
+        // Only allow shooting to detonate
+        if (event.code === 'Space') {
+          currentGun.shoot(); // Detonate the projectile
+        }
+        return; // Ignore all other keys while controlling projectile
       }
 
       switch (event.code) {
@@ -575,6 +602,9 @@
         case 'Digit4':
           switchWeapon('bazooka');
           break;
+        case 'Digit5':
+          switchWeapon('translocator');
+          break;
         case 'KeyB':
           debugMode = !debugMode;
           toggleDebugMode();
@@ -595,6 +625,11 @@
       // Skip if the V key is released and we have a sniper rifle
       // Let the sniper rifle handle it
       if (event.code === 'KeyV' && currentGun instanceof GunSystem.SniperRifle) {
+        return;
+      }
+
+      // Skip all keyboard input if we're controlling a projectile with the Translocator
+      if (currentGun instanceof GunSystem.TranslocatorGun && currentGun.isControllingProjectile) {
         return;
       }
 
@@ -623,6 +658,12 @@
       if (!currentGun) return;
 
       console.log("Mouse down, gun type:", currentGun.constructor.name);
+
+      // If controlling a Translocator projectile, detonate it
+      if (currentGun instanceof GunSystem.TranslocatorGun && currentGun.isControllingProjectile) {
+        currentGun.shoot(); // Detonate the projectile
+        return;
+      }
 
       // Handle different gun types appropriately
       if (currentGun instanceof GunSystem.Bazooka) {
@@ -790,8 +831,10 @@
         const time = performance.now();
         const delta = (time - prevTime) / 1000;
 
-        // Skip movement processing if camera is shaking
-        if (!window.isShakingCamera) {
+        // Skip movement processing if camera is shaking or controlling projectile
+        const isControllingProjectile = currentGun instanceof GunSystem.TranslocatorGun && currentGun.isControllingProjectile;
+
+        if (!window.isShakingCamera && !isControllingProjectile) {
           // Get player velocity
           velocity.x -= velocity.x * 10.0 * delta;
           velocity.z -= velocity.z * 10.0 * delta;
@@ -884,7 +927,8 @@
         prevTime = time;
       }
 
-      renderer.render(scene, camera);
+      // Use the current active camera for rendering (could be player camera or projectile camera)
+      renderer.render(scene, window.camera);
     }
 
     function cleanupDestroyedWalls() {
@@ -1044,6 +1088,9 @@
           break;
         case 'bazooka':
           currentGun = new GunSystem.Bazooka(scene, camera);
+          break;
+        case 'translocator':
+          currentGun = new GunSystem.TranslocatorGun(scene, camera);
           break;
         default:
           currentGun = new GunSystem.Pistol(scene, camera); // Default to pistol

@@ -2154,6 +2154,13 @@ class Bazooka extends Gun {
           const damage = this.damage * damageRatio;
 
           this.applyDamage(wall, damage);
+
+          // Apply force to wall (if it has physics)
+          if (wall.userData.applyForce) {
+            const direction = wallPos.clone().sub(position).normalize();
+            const forceAmount = force * damageRatio;
+            wall.userData.applyForce(direction, forceAmount);
+          }
         }
       }
     }
@@ -2179,11 +2186,975 @@ class Bazooka extends Gun {
   }
 }
 
+// Translocator Gun class
+class TranslocatorGun extends Gun {
+  constructor(scene, camera) {
+    super(scene, camera);
+    this.name = "Translocator";
+    this.damage = 100;
+    this.reloadTime = 2000; // 2 seconds
+    this.lastShootTime = 0;
+    this.canShoot = true;
+    this.projectile = null;
+    this.isControllingProjectile = false;
+    this.originalCameraPosition = new THREE.Vector3();
+    this.originalCameraRotation = new THREE.Euler();
+    this.projectileSpeed = 30;
+    this.projectileControlSpeed = 50; // Increased speed when controlling the projectile
+    this.maxFlightTime = 10; // seconds
+    this.flightStartTime = 0;
+    this.projectileCamera = null;
+    this.trailParticles = [];
+    this.explosionRadius = 10;
+    this.explosionForce = 1000;
+    this.projectileLight = null;
+    this.originalRenderer = null;
+    this.originalCamera = null;
+    this.originalControlsParent = null;
+    this.mouseMoveHandler = null; // Store the mouse move handler for cleanup
+    this.pointerLockChangeHandler = null; // Store the pointer lock change handler for cleanup
+  }
+
+  create() {
+    // Create gun mesh
+    this.mesh = new THREE.Group();
+
+    // Create gun body
+    const bodyGeometry = new THREE.CylinderGeometry(0.05, 0.1, 0.3, 8);
+    const bodyMaterial = new THREE.MeshLambertMaterial({ color: 0x444444 });
+    const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
+    body.rotation.x = Math.PI / 2;
+    this.mesh.add(body);
+
+    // Create barrel
+    const barrelGeometry = new THREE.CylinderGeometry(0.03, 0.03, 0.4, 8);
+    const barrelMaterial = new THREE.MeshLambertMaterial({ color: 0x222222 });
+    const barrel = new THREE.Mesh(barrelGeometry, barrelMaterial);
+    barrel.position.z = 0.2;
+    barrel.rotation.x = Math.PI / 2;
+    this.mesh.add(barrel);
+
+    // Create energy core
+    const coreGeometry = new THREE.SphereGeometry(0.05, 16, 16);
+    const coreMaterial = new THREE.MeshBasicMaterial({
+      color: 0x00ffff,
+      emissive: 0x00ffff,
+      emissiveIntensity: 1
+    });
+    const core = new THREE.Mesh(coreGeometry, coreMaterial);
+    core.position.z = 0.1;
+    core.position.y = 0.08;
+    this.mesh.add(core);
+
+    // Add pulsing light to core
+    const coreLight = new THREE.PointLight(0x00ffff, 1, 0.5);
+    coreLight.position.copy(core.position);
+    this.mesh.add(coreLight);
+
+    // Animate the core light
+    const pulseCore = () => {
+      if (!this.mesh) return;
+
+      const time = Date.now() * 0.001;
+      const intensity = 0.5 + 0.5 * Math.sin(time * 5);
+      coreLight.intensity = intensity;
+
+      requestAnimationFrame(pulseCore);
+    };
+    pulseCore();
+
+    // Position the gun in front of the camera
+    this.mesh.position.set(0.3, -0.2, -0.5);
+    this.camera.add(this.mesh);
+
+    return this.mesh;
+  }
+
+  update(delta) {
+    // If we're controlling the projectile, update its movement
+    if (this.isControllingProjectile && this.projectile) {
+      this.updateProjectileControl(delta);
+
+      // Check if max flight time is exceeded
+      const currentTime = performance.now() / 1000;
+      if (currentTime - this.flightStartTime > this.maxFlightTime) {
+        this.detonateProjectile();
+      }
+    }
+
+    // Update trail particles
+    this.updateTrailParticles(delta);
+  }
+
+  shoot() {
+    if (!this.canShoot) return;
+
+    const now = performance.now();
+    if (now - this.lastShootTime < this.reloadTime) return;
+
+    this.lastShootTime = now;
+    this.canShoot = false;
+
+    // If already controlling a projectile, detonate it
+    if (this.isControllingProjectile) {
+      this.detonateProjectile();
+      return;
+    }
+
+    // Create projectile
+    const projectileGeometry = new THREE.SphereGeometry(0.2, 16, 16);
+    const projectileMaterial = new THREE.MeshBasicMaterial({
+      color: 0x00ffff,
+      emissive: 0x00ffff,
+      emissiveIntensity: 1
+    });
+    this.projectile = new THREE.Mesh(projectileGeometry, projectileMaterial);
+
+    // Position projectile at gun barrel
+    const barrelPosition = new THREE.Vector3(0, 0, -0.5);
+    barrelPosition.applyMatrix4(this.mesh.matrixWorld);
+    this.projectile.position.copy(barrelPosition);
+
+    // Get direction from camera
+    const direction = new THREE.Vector3(0, 0, -1);
+    direction.applyQuaternion(this.camera.quaternion);
+    direction.normalize();
+
+    // Store direction and initial velocity
+    this.projectile.userData = {
+      velocity: direction.clone().multiplyScalar(this.projectileSpeed),
+      direction: direction.clone(),
+      damage: this.damage,
+      createdAt: now
+    };
+
+    // Add projectile to scene
+    this.scene.add(this.projectile);
+
+    // Add light to projectile
+    this.projectileLight = new THREE.PointLight(0x00ffff, 1, 5);
+    this.projectileLight.position.copy(this.projectile.position);
+    this.scene.add(this.projectileLight);
+
+    // Play shoot sound
+    this.playSound('shoot');
+
+    // Start controlling projectile immediately
+    this.startProjectileControl();
+  }
+
+  startProjectileControl() {
+    if (!this.projectile) return;
+
+    // Store original camera position and rotation
+    this.originalCameraPosition.copy(this.camera.position);
+    this.originalCameraRotation.copy(this.camera.rotation);
+
+    // Store original camera and renderer references
+    this.originalCamera = window.camera;
+    this.originalRenderer = window.renderer;
+
+    // Create a camera for the projectile with wider FOV for a more dramatic effect
+    this.projectileCamera = new THREE.PerspectiveCamera(120, window.innerWidth / window.innerHeight, 0.1, 1000);
+
+    // Position the camera exactly at the projectile position
+    this.projectileCamera.position.copy(this.projectile.position);
+
+    // Set initial camera orientation to match player camera
+    this.projectileCamera.quaternion.copy(this.camera.quaternion);
+
+    // Replace the main camera with the projectile camera
+    window.camera = this.projectileCamera;
+
+    // Add the projectile camera to the scene
+    this.scene.add(this.projectileCamera);
+
+    // Initialize Euler angles for tracking rotation
+    const euler = new THREE.Euler(0, 0, 0, 'YXZ');
+
+    // Extract initial rotation from camera quaternion to initialize euler angles
+    euler.setFromQuaternion(this.projectileCamera.quaternion);
+
+    // Create mouse move handler with proper orientation and enhanced sensitivity
+    this.mouseMoveHandler = (event) => {
+      if (!document.pointerLockElement) return;
+
+      // Get mouse movement with increased sensitivity for more responsive control
+      const movementX = event.movementX || event.mozMovementX || event.webkitMovementX || 0;
+      const movementY = event.movementY || event.mozMovementY || event.webkitMovementY || 0;
+
+      // Update euler angles with enhanced sensitivity
+      euler.y -= movementX * 0.003; // Increased horizontal sensitivity
+      euler.x -= movementY * 0.003; // Increased vertical sensitivity
+
+      // Allow more extreme vertical rotation for acrobatic maneuvers
+      euler.x = Math.max(-Math.PI * 0.7, Math.min(Math.PI * 0.7, euler.x));
+
+      // Apply rotation to camera
+      this.projectileCamera.quaternion.setFromEuler(euler);
+    };
+
+    // Add pointer lock change handler
+    const pointerLockChangeHandler = () => {
+      isPointerLocked = document.pointerLockElement !== null;
+    };
+
+    // Store the handler for cleanup
+    this.pointerLockChangeHandler = pointerLockChangeHandler;
+
+    // Add event listeners
+    document.addEventListener('mousemove', this.mouseMoveHandler, false);
+    document.addEventListener('pointerlockchange', pointerLockChangeHandler, false);
+
+    // Create a visible projectile model that appears in front of the camera
+    const projectileModelGeometry = new THREE.ConeGeometry(0.1, 0.3, 8);
+    projectileModelGeometry.rotateX(-Math.PI / 2); // Point forward
+    const projectileModelMaterial = new THREE.MeshBasicMaterial({
+      color: 0x00ffff,
+      transparent: true,
+      opacity: 0.7,
+      wireframe: true // Add wireframe for a more high-tech look
+    });
+    this.projectileModel = new THREE.Mesh(projectileModelGeometry, projectileModelMaterial);
+    this.projectileModel.position.set(0, 0, -0.5); // Position in front of camera
+    this.projectileCamera.add(this.projectileModel);
+
+    // Add fins to the projectile model with glowing effect
+    const finGeometry = new THREE.PlaneGeometry(0.2, 0.1);
+    const finMaterial = new THREE.MeshBasicMaterial({
+      color: 0x00ffff,
+      transparent: true,
+      opacity: 0.9,
+      side: THREE.DoubleSide,
+      emissive: 0x00ffff,
+      emissiveIntensity: 2.0
+    });
+
+    // Top fin
+    const topFin = new THREE.Mesh(finGeometry, finMaterial);
+    topFin.position.set(0, 0.1, 0.05);
+    topFin.rotation.x = Math.PI / 2;
+    this.projectileModel.add(topFin);
+
+    // Bottom fin
+    const bottomFin = new THREE.Mesh(finGeometry, finMaterial);
+    bottomFin.position.set(0, -0.1, 0.05);
+    bottomFin.rotation.x = Math.PI / 2;
+    this.projectileModel.add(bottomFin);
+
+    // Left fin
+    const leftFin = new THREE.Mesh(finGeometry, finMaterial);
+    leftFin.position.set(-0.1, 0, 0.05);
+    leftFin.rotation.z = Math.PI / 2;
+    leftFin.rotation.x = Math.PI / 2;
+    this.projectileModel.add(leftFin);
+
+    // Right fin
+    const rightFin = new THREE.Mesh(finGeometry, finMaterial);
+    rightFin.position.set(0.1, 0, 0.05);
+    rightFin.rotation.z = Math.PI / 2;
+    rightFin.rotation.x = Math.PI / 2;
+    this.projectileModel.add(rightFin);
+
+    // Add HUD elements for projectile view
+    this.createProjectileHUD();
+
+    // Hide the gun while controlling projectile
+    if (this.mesh) {
+      this.mesh.visible = false;
+    }
+
+    // Hide the crosshair
+    const crosshair = document.getElementById('crosshair');
+    if (crosshair) {
+      crosshair.style.display = 'none';
+    }
+
+    // Set flag
+    this.isControllingProjectile = true;
+    this.flightStartTime = performance.now() / 1000;
+
+    // Play transition sound
+    this.playSound('transition');
+
+    // Add a subtle rotation effect to simulate projectile spin
+    this.projectileSpinRate = 0.5; // radians per second
+    this.lastSpinTime = performance.now();
+
+    console.log("Switched to projectile view - Guided missile mode");
+  }
+
+  // Create HUD elements for projectile view
+  createProjectileHUD() {
+    // Remove any existing HUD
+    this.removeProjectileHUD();
+
+    // Create HUD container
+    this.hudContainer = document.createElement('div');
+    this.hudContainer.id = 'projectile-hud';
+    this.hudContainer.style.position = 'absolute';
+    this.hudContainer.style.top = '0';
+    this.hudContainer.style.left = '0';
+    this.hudContainer.style.width = '100%';
+    this.hudContainer.style.height = '100%';
+    this.hudContainer.style.pointerEvents = 'none';
+    this.hudContainer.style.zIndex = '100';
+    document.body.appendChild(this.hudContainer);
+
+    // Add full-screen overlay with sci-fi border effect
+    const overlay = document.createElement('div');
+    overlay.style.position = 'absolute';
+    overlay.style.top = '0';
+    overlay.style.left = '0';
+    overlay.style.width = '100%';
+    overlay.style.height = '100%';
+    overlay.style.boxShadow = 'inset 0 0 150px rgba(0, 255, 255, 0.3)';
+    overlay.style.border = '2px solid rgba(0, 255, 255, 0.5)';
+    overlay.style.pointerEvents = 'none';
+    this.hudContainer.appendChild(overlay);
+
+    // Add corner elements for a sci-fi HUD feel
+    const corners = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
+    corners.forEach(corner => {
+      const cornerElement = document.createElement('div');
+      cornerElement.style.position = 'absolute';
+      cornerElement.style.width = '80px';
+      cornerElement.style.height = '80px';
+      cornerElement.style.borderColor = 'rgba(0, 255, 255, 0.7)';
+      cornerElement.style.borderWidth = '3px';
+
+      // Set position and border style based on corner
+      if (corner === 'top-left') {
+        cornerElement.style.top = '10px';
+        cornerElement.style.left = '10px';
+        cornerElement.style.borderTop = '3px solid rgba(0, 255, 255, 0.7)';
+        cornerElement.style.borderLeft = '3px solid rgba(0, 255, 255, 0.7)';
+      } else if (corner === 'top-right') {
+        cornerElement.style.top = '10px';
+        cornerElement.style.right = '10px';
+        cornerElement.style.borderTop = '3px solid rgba(0, 255, 255, 0.7)';
+        cornerElement.style.borderRight = '3px solid rgba(0, 255, 255, 0.7)';
+      } else if (corner === 'bottom-left') {
+        cornerElement.style.bottom = '10px';
+        cornerElement.style.left = '10px';
+        cornerElement.style.borderBottom = '3px solid rgba(0, 255, 255, 0.7)';
+        cornerElement.style.borderLeft = '3px solid rgba(0, 255, 255, 0.7)';
+      } else if (corner === 'bottom-right') {
+        cornerElement.style.bottom = '10px';
+        cornerElement.style.right = '10px';
+        cornerElement.style.borderBottom = '3px solid rgba(0, 255, 255, 0.7)';
+        cornerElement.style.borderRight = '3px solid rgba(0, 255, 255, 0.7)';
+      }
+
+      this.hudContainer.appendChild(cornerElement);
+    });
+
+    // Add horizontal scan line
+    const scanLine = document.createElement('div');
+    scanLine.style.position = 'absolute';
+    scanLine.style.top = '50%';
+    scanLine.style.left = '0';
+    scanLine.style.width = '100%';
+    scanLine.style.height = '2px';
+    scanLine.style.backgroundColor = 'rgba(0, 255, 255, 0.3)';
+    scanLine.style.boxShadow = '0 0 10px rgba(0, 255, 255, 0.5)';
+    scanLine.style.transform = 'translateY(-50%)';
+    this.hudContainer.appendChild(scanLine);
+
+    // Add vertical scan line
+    const verticalScanLine = document.createElement('div');
+    verticalScanLine.style.position = 'absolute';
+    verticalScanLine.style.top = '0';
+    verticalScanLine.style.left = '50%';
+    verticalScanLine.style.width = '2px';
+    verticalScanLine.style.height = '100%';
+    verticalScanLine.style.backgroundColor = 'rgba(0, 255, 255, 0.3)';
+    verticalScanLine.style.boxShadow = '0 0 10px rgba(0, 255, 255, 0.5)';
+    verticalScanLine.style.transform = 'translateX(-50%)';
+    this.hudContainer.appendChild(verticalScanLine);
+
+    // Add targeting reticle (smaller and more subtle)
+    const reticle = document.createElement('div');
+    reticle.style.position = 'absolute';
+    reticle.style.top = '50%';
+    reticle.style.left = '50%';
+    reticle.style.width = '40px';
+    reticle.style.height = '40px';
+    reticle.style.marginTop = '-20px';
+    reticle.style.marginLeft = '-20px';
+    reticle.style.border = '1px solid rgba(0, 255, 255, 0.7)';
+    reticle.style.borderRadius = '50%';
+    reticle.style.boxShadow = '0 0 5px rgba(0, 255, 255, 0.5)';
+    this.hudContainer.appendChild(reticle);
+
+    // Add inner reticle dot
+    const innerReticle = document.createElement('div');
+    innerReticle.style.position = 'absolute';
+    innerReticle.style.top = '50%';
+    innerReticle.style.left = '50%';
+    innerReticle.style.width = '4px';
+    innerReticle.style.height = '4px';
+    innerReticle.style.marginTop = '-2px';
+    innerReticle.style.marginLeft = '-2px';
+    innerReticle.style.backgroundColor = 'rgba(0, 255, 255, 0.9)';
+    innerReticle.style.borderRadius = '50%';
+    innerReticle.style.boxShadow = '0 0 3px rgba(0, 255, 255, 0.9)';
+    this.hudContainer.appendChild(innerReticle);
+
+    // Add full-screen scanlines effect
+    const scanlines = document.createElement('div');
+    scanlines.style.position = 'absolute';
+    scanlines.style.top = '0';
+    scanlines.style.left = '0';
+    scanlines.style.width = '100%';
+    scanlines.style.height = '100%';
+    scanlines.style.background = 'linear-gradient(rgba(0, 255, 255, 0.03) 50%, transparent 50%)';
+    scanlines.style.backgroundSize = '100% 4px';
+    scanlines.style.pointerEvents = 'none';
+    scanlines.style.opacity = '0.3';
+    this.hudContainer.appendChild(scanlines);
+
+    // Add data panel in top-left
+    const dataPanel = document.createElement('div');
+    dataPanel.style.position = 'absolute';
+    dataPanel.style.top = '30px';
+    dataPanel.style.left = '30px';
+    dataPanel.style.padding = '10px';
+    dataPanel.style.backgroundColor = 'rgba(0, 0, 0, 0.5)';
+    dataPanel.style.border = '1px solid rgba(0, 255, 255, 0.5)';
+    dataPanel.style.borderRadius = '5px';
+    dataPanel.style.color = '#00ffff';
+    dataPanel.style.fontFamily = 'monospace';
+    dataPanel.style.fontSize = '14px';
+    dataPanel.style.textShadow = '0 0 5px rgba(0, 255, 255, 0.5)';
+    dataPanel.style.width = '180px';
+    this.hudContainer.appendChild(dataPanel);
+
+    // Add data panel content
+    const dataPanelTitle = document.createElement('div');
+    dataPanelTitle.style.borderBottom = '1px solid rgba(0, 255, 255, 0.5)';
+    dataPanelTitle.style.paddingBottom = '5px';
+    dataPanelTitle.style.marginBottom = '5px';
+    dataPanelTitle.style.fontWeight = 'bold';
+    dataPanelTitle.textContent = 'TRANSLOCATOR SYSTEMS';
+    dataPanel.appendChild(dataPanelTitle);
+
+    // Add flight time indicator
+    this.flightTimeIndicator = document.createElement('div');
+    this.flightTimeIndicator.style.margin = '5px 0';
+    this.flightTimeIndicator.textContent = 'FLIGHT TIME: 0.00s';
+    dataPanel.appendChild(this.flightTimeIndicator);
+
+    // Add speed indicator
+    this.speedIndicator = document.createElement('div');
+    this.speedIndicator.style.margin = '5px 0';
+    this.speedIndicator.textContent = 'SPEED: ' + Math.round(this.projectileControlSpeed) + ' m/s';
+    dataPanel.appendChild(this.speedIndicator);
+
+    // Add altitude indicator
+    this.altitudeIndicator = document.createElement('div');
+    this.altitudeIndicator.style.margin = '5px 0';
+    this.altitudeIndicator.textContent = 'ALTITUDE: ' + this.projectile.position.y.toFixed(1) + ' m';
+    dataPanel.appendChild(this.altitudeIndicator);
+
+    // Add status indicator
+    this.statusIndicator = document.createElement('div');
+    this.statusIndicator.style.margin = '5px 0';
+    this.statusIndicator.style.color = '#00ff00';
+    this.statusIndicator.textContent = 'STATUS: NOMINAL';
+    dataPanel.appendChild(this.statusIndicator);
+
+    // Add navigation compass at the top
+    const compass = document.createElement('div');
+    compass.style.position = 'absolute';
+    compass.style.top = '10px';
+    compass.style.left = '50%';
+    compass.style.transform = 'translateX(-50%)';
+    compass.style.width = '300px';
+    compass.style.height = '30px';
+    compass.style.backgroundColor = 'rgba(0, 0, 0, 0.5)';
+    compass.style.border = '1px solid rgba(0, 255, 255, 0.5)';
+    compass.style.borderRadius = '5px';
+    compass.style.overflow = 'hidden';
+    this.hudContainer.appendChild(compass);
+
+    // Add compass markers
+    const directions = ['W', 'NW', 'N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW', 'N'];
+    const compassTrack = document.createElement('div');
+    compassTrack.style.position = 'absolute';
+    compassTrack.style.top = '5px';
+    compassTrack.style.left = '0';
+    compassTrack.style.width = '600px';
+    compassTrack.style.height = '20px';
+    compassTrack.style.display = 'flex';
+    compassTrack.style.justifyContent = 'space-between';
+    compass.appendChild(compassTrack);
+
+    // Add compass direction markers
+    directions.forEach((dir, index) => {
+      const marker = document.createElement('div');
+      marker.style.color = '#00ffff';
+      marker.style.fontFamily = 'monospace';
+      marker.style.fontSize = '12px';
+      marker.style.textAlign = 'center';
+      marker.style.width = '30px';
+      marker.textContent = dir;
+      compassTrack.appendChild(marker);
+    });
+
+    // Add compass needle
+    const compassNeedle = document.createElement('div');
+    compassNeedle.style.position = 'absolute';
+    compassNeedle.style.top = '0';
+    compassNeedle.style.left = '50%';
+    compassNeedle.style.width = '2px';
+    compassNeedle.style.height = '30px';
+    compassNeedle.style.backgroundColor = 'rgba(255, 0, 0, 0.7)';
+    compassNeedle.style.transform = 'translateX(-50%)';
+    compass.appendChild(compassNeedle);
+
+    // Add warning indicator (initially hidden)
+    this.warningIndicator = document.createElement('div');
+    this.warningIndicator.style.position = 'absolute';
+    this.warningIndicator.style.top = '50%';
+    this.warningIndicator.style.left = '50%';
+    this.warningIndicator.style.transform = 'translate(-50%, -50%)';
+    this.warningIndicator.style.color = '#ff0000';
+    this.warningIndicator.style.fontFamily = 'monospace';
+    this.warningIndicator.style.fontSize = '24px';
+    this.warningIndicator.style.fontWeight = 'bold';
+    this.warningIndicator.style.textShadow = '0 0 10px #ff0000';
+    this.warningIndicator.style.display = 'none';
+    this.warningIndicator.textContent = 'PROXIMITY WARNING';
+    this.hudContainer.appendChild(this.warningIndicator);
+
+    // Add instruction text
+    const instructionText = document.createElement('div');
+    instructionText.style.position = 'absolute';
+    instructionText.style.bottom = '20px';
+    instructionText.style.left = '50%';
+    instructionText.style.transform = 'translateX(-50%)';
+    instructionText.style.color = '#00ffff';
+    instructionText.style.fontFamily = 'monospace';
+    instructionText.style.fontSize = '14px';
+    instructionText.style.textAlign = 'center';
+    instructionText.style.textShadow = '0 0 5px rgba(0, 255, 255, 0.5)';
+    instructionText.textContent = 'CLICK or SPACE to detonate';
+    this.hudContainer.appendChild(instructionText);
+
+    // Store compass track for updating
+    this.compassTrack = compassTrack;
+  }
+
+  // Remove HUD elements
+  removeProjectileHUD() {
+    const existingHUD = document.getElementById('projectile-hud');
+    if (existingHUD) {
+      document.body.removeChild(existingHUD);
+    }
+  }
+
+  updateProjectileControl(delta) {
+    if (!this.projectile || !this.isControllingProjectile) return;
+
+    // Get the current direction the camera is facing
+    const direction = new THREE.Vector3(0, 0, -1);
+    direction.applyQuaternion(this.projectileCamera.quaternion);
+    direction.normalize();
+
+    // Move the projectile forward in the direction the camera is facing
+    const moveDistance = this.projectileControlSpeed * delta;
+
+    // Update both the projectile and camera position together
+    // This prevents any position jumps due to synchronization issues
+    const movement = direction.clone().multiplyScalar(moveDistance);
+    this.projectile.position.add(movement);
+    this.projectileCamera.position.copy(this.projectile.position);
+
+    // Update projectile light position
+    if (this.projectileLight) {
+      this.projectileLight.position.copy(this.projectile.position);
+    }
+
+    // Create trail particles
+    this.createTrailParticle();
+
+    // Check for collisions
+    this.checkProjectileCollisions();
+
+    // Update HUD elements if they exist
+    this.updateProjectileHUD(delta);
+
+    // Apply subtle spin effect to the projectile model
+    if (this.projectileModel) {
+      const now = performance.now();
+      const spinDelta = (now - this.lastSpinTime) / 1000;
+      this.lastSpinTime = now;
+
+      // Apply a subtle roll rotation to the projectile model
+      this.projectileModel.rotation.z += this.projectileSpinRate * spinDelta;
+
+      // Add a subtle wobble effect
+      const flightTime = (now / 1000) - this.flightStartTime;
+      const wobbleAmount = 0.02;
+      this.projectileModel.rotation.x = Math.sin(flightTime * 2) * wobbleAmount;
+      this.projectileModel.rotation.y = Math.cos(flightTime * 3) * wobbleAmount;
+    }
+
+    // Apply a subtle camera shake effect
+    const shakeAmount = 0.0005;
+    this.projectileCamera.position.x += (Math.random() - 0.5) * shakeAmount;
+    this.projectileCamera.position.y += (Math.random() - 0.5) * shakeAmount;
+    this.projectileCamera.position.z += (Math.random() - 0.5) * shakeAmount;
+
+    // Apply a subtle chromatic aberration effect by adjusting the renderer
+    if (window.renderer && window.renderer.domElement) {
+      // Reset any previous filter
+      window.renderer.domElement.style.filter = `
+        saturate(1.2)
+        brightness(1.1)
+        contrast(1.1)
+        hue-rotate(${Math.sin(performance.now() * 0.001) * 5}deg)
+      `;
+    }
+  }
+
+  // Update HUD elements
+  updateProjectileHUD(delta) {
+    if (!this.hudContainer) return;
+
+    // Update flight time
+    if (this.flightTimeIndicator) {
+      const flightTime = performance.now() / 1000 - this.flightStartTime;
+      this.flightTimeIndicator.textContent = `FLIGHT TIME: ${flightTime.toFixed(2)}s`;
+    }
+
+    // Update speed
+    if (this.speedIndicator) {
+      this.speedIndicator.textContent = `SPEED: ${Math.round(this.projectileControlSpeed)} m/s`;
+    }
+
+    // Update altitude
+    if (this.altitudeIndicator) {
+      this.altitudeIndicator.textContent = `ALTITUDE: ${this.projectile.position.y.toFixed(1)} m`;
+
+      // Change status indicator based on altitude
+      if (this.statusIndicator) {
+        if (this.projectile.position.y < 1.0) {
+          this.statusIndicator.textContent = 'STATUS: WARNING';
+          this.statusIndicator.style.color = '#ff0000';
+        } else {
+          this.statusIndicator.textContent = 'STATUS: NOMINAL';
+          this.statusIndicator.style.color = '#00ff00';
+        }
+      }
+    }
+
+    // Update compass based on camera direction
+    if (this.compassTrack) {
+      // Get the current direction the camera is facing
+      const direction = new THREE.Vector3(0, 0, -1);
+      direction.applyQuaternion(this.projectileCamera.quaternion);
+      direction.y = 0; // Ignore vertical component
+      direction.normalize();
+
+      // Calculate angle in degrees (0 = North, 90 = East, etc.)
+      const angle = Math.atan2(direction.x, direction.z) * (180 / Math.PI);
+
+      // Move the compass track based on the angle
+      // Each direction marker is approximately 60px apart in our 600px track
+      const offset = (angle / 360) * 600;
+      this.compassTrack.style.transform = `translateX(${150 - offset}px)`;
+    }
+
+    // Show warning indicator when close to ground or obstacles
+    if (this.warningIndicator) {
+      // Check if close to ground
+      const isCloseToGround = this.projectile.position.y < 1.0;
+
+      // Check if close to walls
+      let isCloseToWall = false;
+      if (window.walls) {
+        for (const wall of window.walls) {
+          if (wall.userData.destroyed) continue;
+
+          const wallPos = new THREE.Vector3();
+          wall.getWorldPosition(wallPos);
+
+          const distance = this.projectile.position.distanceTo(wallPos);
+          if (distance < 3.0) {
+            isCloseToWall = true;
+            break;
+          }
+        }
+      }
+
+      // Show warning if close to ground or walls
+      if (isCloseToGround || isCloseToWall) {
+        this.warningIndicator.style.display = 'block';
+
+        // Make it flash
+        const flashRate = Math.sin(performance.now() * 0.01) > 0 ? 1 : 0.3;
+        this.warningIndicator.style.opacity = flashRate.toString();
+      } else {
+        this.warningIndicator.style.display = 'none';
+      }
+    }
+
+    // Pulse the reticle based on flight time
+    const reticle = this.hudContainer.querySelector('div:nth-child(6)'); // The reticle element
+    if (reticle) {
+      const pulseScale = 1 + Math.sin(performance.now() * 0.005) * 0.1;
+      reticle.style.transform = `scale(${pulseScale})`;
+    }
+
+    // Add a subtle movement to the corner elements
+    const corners = this.hudContainer.querySelectorAll('div:nth-child(3), div:nth-child(4), div:nth-child(5), div:nth-child(6)');
+    corners.forEach((corner, index) => {
+      const time = performance.now() * 0.001;
+      const offset = Math.sin(time + index) * 2;
+
+      if (index === 0) { // top-left
+        corner.style.transform = `translate(${offset}px, ${offset}px)`;
+      } else if (index === 1) { // top-right
+        corner.style.transform = `translate(${-offset}px, ${offset}px)`;
+      } else if (index === 2) { // bottom-left
+        corner.style.transform = `translate(${offset}px, ${-offset}px)`;
+      } else if (index === 3) { // bottom-right
+        corner.style.transform = `translate(${-offset}px, ${-offset}px)`;
+      }
+    });
+  }
+
+  createTrailParticle() {
+    // Create a trail particle
+    const particleGeometry = new THREE.SphereGeometry(0.05 + Math.random() * 0.05, 8, 8);
+    const particleMaterial = new THREE.MeshBasicMaterial({
+      color: 0x00ffff,
+      transparent: true,
+      opacity: 0.7
+    });
+
+    const particle = new THREE.Mesh(particleGeometry, particleMaterial);
+    particle.position.copy(this.projectile.position);
+
+    // Add random offset
+    particle.position.x += (Math.random() - 0.5) * 0.1;
+    particle.position.y += (Math.random() - 0.5) * 0.1;
+    particle.position.z += (Math.random() - 0.5) * 0.1;
+
+    // Add particle data
+    particle.userData = {
+      createdAt: performance.now(),
+      lifespan: 500 + Math.random() * 500 // 0.5-1 second lifespan
+    };
+
+    // Add to scene and trail array
+    this.scene.add(particle);
+    this.trailParticles.push(particle);
+  }
+
+  updateTrailParticles(delta) {
+    if (!this.trailParticles.length) return;
+
+    const now = performance.now();
+
+    // Update each particle
+    for (let i = this.trailParticles.length - 1; i >= 0; i--) {
+      const particle = this.trailParticles[i];
+
+      // Check if particle should be removed
+      if (now - particle.userData.createdAt > particle.userData.lifespan) {
+        this.scene.remove(particle);
+        this.trailParticles.splice(i, 1);
+        continue;
+      }
+
+      // Fade out particle
+      const age = (now - particle.userData.createdAt) / particle.userData.lifespan;
+      particle.material.opacity = 0.7 * (1 - age);
+
+      // Shrink particle
+      const scale = 1 - age;
+      particle.scale.set(scale, scale, scale);
+    }
+  }
+
+  checkProjectileCollisions() {
+    if (!this.projectile || !this.isControllingProjectile) return;
+
+    // Check collision with ground
+    // Assuming ground is at y=0, adjust if your ground is at a different height
+    if (this.projectile.position.y <= 0.2) { // 0.2 is the projectile radius
+      this.detonateProjectile();
+      return;
+    }
+
+    // Check collision with walls
+    for (const wall of window.walls) {
+      // Skip destroyed walls
+      if (wall.userData.destroyed) continue;
+
+      // Create bounding boxes
+      const projectileSphere = new THREE.Sphere(
+        this.projectile.position.clone(),
+        0.2 // Projectile radius
+      );
+
+      const wallBox = new THREE.Box3().setFromObject(wall);
+
+      // Check for collision
+      if (wallBox.intersectsSphere(projectileSphere)) {
+        this.detonateProjectile();
+        return;
+      }
+    }
+
+    // Check collision with enemies
+    if (window.enemies) {
+      for (const enemy of window.enemies) {
+        if (enemy.isDead) continue;
+
+        // Simple sphere collision detection
+        const enemyPosition = enemy.mesh.position.clone();
+        enemyPosition.y += 1.5; // Adjust to center of enemy
+
+        const distance = this.projectile.position.distanceTo(enemyPosition);
+
+        if (distance < 1.0) { // Enemy collision radius + projectile radius
+          this.detonateProjectile();
+          return;
+        }
+      }
+    }
+
+    // Check if we're out of bounds (too far from origin)
+    const distanceFromOrigin = this.projectile.position.length();
+    if (distanceFromOrigin > 100) { // Maximum allowed distance
+      this.detonateProjectile();
+      return;
+    }
+  }
+
+  detonateProjectile() {
+    if (!this.projectile) return;
+
+    // Create explosion
+    this.createExplosion(this.projectile.position.clone(), this.explosionRadius, this.explosionForce);
+
+    // Apply damage to nearby objects
+    this.applyExplosionDamage(this.projectile.position.clone(), this.explosionRadius, this.explosionForce);
+
+    // Remove projectile
+    this.scene.remove(this.projectile);
+    this.projectile = null;
+
+    // Remove projectile model if it exists
+    if (this.projectileModel) {
+      this.projectileCamera.remove(this.projectileModel);
+      this.projectileModel = null;
+    }
+
+    // Remove projectile light
+    if (this.projectileLight) {
+      this.scene.remove(this.projectileLight);
+      this.projectileLight = null;
+    }
+
+    // Remove projectile camera from scene
+    if (this.projectileCamera) {
+      this.scene.remove(this.projectileCamera);
+    }
+
+    // Remove HUD elements
+    this.removeProjectileHUD();
+
+    // Reset renderer filter effects
+    if (window.renderer && window.renderer.domElement) {
+      window.renderer.domElement.style.filter = '';
+    }
+
+    // Remove event listeners
+    document.removeEventListener('mousemove', this.mouseMoveHandler, false);
+    document.removeEventListener('pointerlockchange', this.pointerLockChangeHandler, false);
+
+    // Restore original camera
+    window.camera = this.originalCamera;
+
+    // Show gun
+    if (this.mesh) {
+      this.mesh.visible = true;
+    }
+
+    // Show crosshair
+    const crosshair = document.getElementById('crosshair');
+    if (crosshair) {
+      crosshair.style.display = 'block';
+    }
+
+    // Reset flag
+    this.isControllingProjectile = false;
+
+    // Play explosion sound
+    this.playSound('explosion');
+
+    // Add a camera shake effect to the player camera
+    if (typeof window.shakeCamera === 'function') {
+      window.shakeCamera(0.5);
+    }
+
+    console.log("Projectile detonated - Returning to player view");
+  }
+
+  playSound(type) {
+    // Create and play sound
+    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    const oscillator = audioContext.createOscillator();
+    const gainNode = audioContext.createGain();
+
+    oscillator.connect(gainNode);
+    gainNode.connect(audioContext.destination);
+
+    switch (type) {
+      case 'shoot':
+        oscillator.type = 'sine';
+        oscillator.frequency.setValueAtTime(880, audioContext.currentTime);
+        oscillator.frequency.exponentialRampToValueAtTime(220, audioContext.currentTime + 0.2);
+        gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.2);
+        oscillator.start();
+        oscillator.stop(audioContext.currentTime + 0.2);
+        break;
+
+      case 'transition':
+        oscillator.type = 'sine';
+        oscillator.frequency.setValueAtTime(440, audioContext.currentTime);
+        oscillator.frequency.exponentialRampToValueAtTime(880, audioContext.currentTime + 0.3);
+        gainNode.gain.setValueAtTime(0.2, audioContext.currentTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.3);
+        oscillator.start();
+        oscillator.stop(audioContext.currentTime + 0.3);
+        break;
+
+      case 'explosion':
+        oscillator.type = 'sawtooth';
+        oscillator.frequency.setValueAtTime(100, audioContext.currentTime);
+        oscillator.frequency.exponentialRampToValueAtTime(20, audioContext.currentTime + 0.5);
+        gainNode.gain.setValueAtTime(0.5, audioContext.currentTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.5);
+        oscillator.start();
+        oscillator.stop(audioContext.currentTime + 0.5);
+        break;
+    }
+  }
+}
+
 // Export gun classes
 window.GunSystem = {
   Gun,
   GatlingGun,
   Pistol,
   SniperRifle,
-  Bazooka
+  Bazooka,
+  TranslocatorGun
 }; 
