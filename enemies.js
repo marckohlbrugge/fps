@@ -1,7 +1,10 @@
+import * as THREE from 'three';
+import { Animal } from './animals.js';
+
 // Enemy system for FPS game
 
 // Define the Enemy class that extends Animal
-class Enemy extends Animal {
+export class Enemy extends Animal {
   constructor(scene, position, camera) {
     super(scene, position);
     this.camera = camera;

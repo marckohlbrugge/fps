@@ -1,4 +1,4 @@
-import * as THREE from 'three';
+import * as THREE from 'https://unpkg.com/three@0.157.0/build/three.module.js';
 import { Gun } from './Gun.js';
 
 export class Akimbo extends Gun {
@@ -121,7 +121,7 @@ export class Akimbo extends Gun {
     if (!this.canShoot) return;
 
     // Play shooting sound
-    this.playSound('shoot');
+    this.effects.playSound('shoot_akimbo');
 
     // Determine which gun to shoot from
     const currentGun = this.alternateGun === 'right' ? this.rightPistol : this.leftPistol;
@@ -155,58 +155,7 @@ export class Akimbo extends Gun {
     this.scene.add(bullet);
     this.bullets.push(bullet);
 
-    // Add bullet trail
-    const trailGeometry = new THREE.BufferGeometry();
-    const trailMaterial = new THREE.LineBasicMaterial({ color: 0xff9900, opacity: 0.5, transparent: true });
-
-    const trailPositions = new Float32Array(2 * 3); // 2 points, 3 coordinates each
-    trailGeometry.setAttribute('position', new THREE.BufferAttribute(trailPositions, 3));
-
-    const trail = new THREE.Line(trailGeometry, trailMaterial);
-    bullet.userData.trail = trail;
-    this.scene.add(trail);
-
-    // Add recoil animation to the current gun
-    const originalPosition = currentGun.position.clone();
-    currentGun.position.z += 0.05; // Move gun backward
-
-    // Return to original position
-    setTimeout(() => {
-      currentGun.position.copy(originalPosition);
-    }, 100);
-  }
-
-  // Custom akimbo sound - slightly different from pistol
-  generateShootSound() {
-    // Create oscillator
-    const oscillator = this.audioContext.createOscillator();
-    const gainNode = this.audioContext.createGain();
-
-    // Connect nodes
-    oscillator.connect(gainNode);
-    gainNode.connect(this.audioContext.destination);
-
-    // Set parameters for a pistol sound with slight variation
-    oscillator.type = 'square';
-    oscillator.frequency.setValueAtTime(200, this.audioContext.currentTime);
-    oscillator.frequency.exponentialRampToValueAtTime(50, this.audioContext.currentTime + 0.1);
-
-    // Volume envelope - sharper attack for pistol
-    gainNode.gain.setValueAtTime(0.35, this.audioContext.currentTime);
-    gainNode.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + 0.1);
-
-    // Play and stop
-    oscillator.start();
-    oscillator.stop(this.audioContext.currentTime + 0.1);
-  }
-
-  // Override the playSound method to use our custom sound
-  playSound(type) {
-    if (type === 'shoot') {
-      this.generateShootSound();
-    } else {
-      // For other sound types (impact, explosion), use the parent class method
-      super.playSound(type);
-    }
+    // Add bullet trail using GunEffects utility
+    this.effects.createBulletTrail(bullet, 0xff9900);
   }
 } 

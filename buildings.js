@@ -1,6 +1,8 @@
+import * as THREE from 'https://unpkg.com/three@0.157.0/build/three.module.js';
+
 // Building system for FPS game
 
-class Building {
+export class Building {
   constructor(scene, position, dimensions, options = {}) {
     this.scene = scene;
     this.position = position;
@@ -361,7 +363,7 @@ class Building {
 }
 
 // Simple house building
-class House extends Building {
+export class House extends Building {
   constructor(scene, position, options = {}) {
     // Default house dimensions
     const dimensions = {
@@ -383,7 +385,7 @@ class House extends Building {
 }
 
 // Office building
-class OfficeBuilding extends Building {
+export class OfficeBuilding extends Building {
   constructor(scene, position, options = {}) {
     // Default office building dimensions
     const dimensions = {
@@ -402,11 +404,4 @@ class OfficeBuilding extends Building {
 
     super(scene, position, dimensions, officeOptions);
   }
-}
-
-// Export building classes
-window.BuildingSystem = {
-  Building,
-  House,
-  OfficeBuilding
-}; 
+} 

@@ -1,3 +1,4 @@
+import * as THREE from 'https://unpkg.com/three@0.157.0/build/three.module.js';
 import { Gun } from './Gun.js';
 
 /**
@@ -134,7 +135,7 @@ export class GatlingGun extends Gun {
     if (!this.canShoot) return;
 
     // Play shooting sound
-    this.playSound('shoot');
+    this.effects.playSound('shoot');
 
     // Create bullet geometry
     const bulletGeometry = new THREE.SphereGeometry(0.03, 8, 8);
@@ -180,7 +181,7 @@ export class GatlingGun extends Gun {
     this.createEnhancedBulletTrail(bullet, barrelTip);
 
     // Add muzzle flash
-    this.createMuzzleFlash(barrelTip, bulletDirection);
+    this.effects.createMuzzleFlash(barrelTip, bulletDirection);
 
     // Set shooting cooldown based on rotation speed
     const speedFactor = Math.min(1, Math.max(0, (this.rotationSpeed - this.minFireSpeed) / (this.optimalFireSpeed - this.minFireSpeed)));
@@ -287,115 +288,5 @@ export class GatlingGun extends Gun {
     // Fade out the trail over time
     const age = (performance.now() - bullet.userData.createdAt) / bullet.userData.lifespan;
     bullet.userData.trail.material.opacity = 0.7 * (1 - age);
-  }
-
-  // Add a custom shooting sound for the Gatling gun
-  generateShootSound() {
-    // Create oscillators for a more complex sound
-    const oscillator1 = this.audioContext.createOscillator();
-    const oscillator2 = this.audioContext.createOscillator();
-    const gainNode = this.audioContext.createGain();
-
-    // Connect nodes
-    oscillator1.connect(gainNode);
-    oscillator2.connect(gainNode);
-    gainNode.connect(this.audioContext.destination);
-
-    // Set parameters for a gatling gun sound
-    oscillator1.type = 'square';
-    oscillator1.frequency.setValueAtTime(220, this.audioContext.currentTime);
-    oscillator1.frequency.exponentialRampToValueAtTime(110, this.audioContext.currentTime + 0.05);
-
-    oscillator2.type = 'sawtooth';
-    oscillator2.frequency.setValueAtTime(440, this.audioContext.currentTime);
-    oscillator2.frequency.exponentialRampToValueAtTime(220, this.audioContext.currentTime + 0.05);
-
-    // Volume envelope
-    gainNode.gain.setValueAtTime(0.15, this.audioContext.currentTime);
-    gainNode.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + 0.05);
-
-    // Play and stop
-    oscillator1.start();
-    oscillator2.start();
-    oscillator1.stop(this.audioContext.currentTime + 0.05);
-    oscillator2.stop(this.audioContext.currentTime + 0.05);
-  }
-
-  // Override the playSound method to use our custom sound
-  playSound(type) {
-    if (type === 'shoot') {
-      this.generateShootSound();
-    } else {
-      // For other sound types (impact, explosion), use the parent class method
-      super.playSound(type);
-    }
-  }
-
-  // Override createImpactEffect to create more particles for Gatling Gun hits
-  createImpactEffect(position, normal, hitObject) {
-    // Check if we hit a bunny
-    if (hitObject && hitObject.userData && hitObject.userData.isBunny) {
-      // Create red blood particles for bunny hit
-      this.createBloodParticles(position);
-      return;
-    }
-
-    // Create particles
-    if (!window.particles) {
-      window.particles = [];
-    }
-
-    // Gatling gun creates more particles for dramatic effect
-    const particleCount = 10;
-
-    // Rest of the method is the same as the parent Gun class
-    // Determine particle color based on hit object or floor
-    let color = 0xbbbbbb; // Default gray
-
-    if (hitObject === null && normal.y > 0.9) {
-      // We hit the floor - use dirt/ground color
-      color = 0x8B4513; // Saddle brown for dirt
-    } else if (hitObject && hitObject.material && hitObject.material.color) {
-      // Use the color of the hit object
-      color = hitObject.material.color.getHex();
-    }
-
-    for (let i = 0; i < particleCount; i++) {
-      // Create particle
-      const size = 0.05 + Math.random() * 0.05;
-      const geometry = new THREE.BoxGeometry(size, size, size);
-      const material = new THREE.MeshBasicMaterial({
-        color: color,
-        transparent: true,
-        opacity: 0.8
-      });
-
-      const particle = new THREE.Mesh(geometry, material);
-
-      // Position at impact point
-      particle.position.copy(position);
-
-      // Add slight offset to avoid z-fighting
-      particle.position.add(normal.clone().multiplyScalar(0.05));
-
-      // Set velocity - mostly along normal but with some randomness
-      const velocity = new THREE.Vector3(
-        normal.x + (Math.random() - 0.5) * 0.5,
-        normal.y + (Math.random() - 0.5) * 0.5 + 0.5, // Add upward bias
-        normal.z + (Math.random() - 0.5) * 0.5
-      ).normalize().multiplyScalar(1 + Math.random() * 2);
-
-      particle.userData.velocity = velocity;
-      particle.userData.createdAt = performance.now();
-      particle.userData.lifespan = 1000 + Math.random() * 1000; // 1-2 seconds
-
-      this.scene.add(particle);
-      window.particles.push(particle);
-    }
-
-    // Create impact mark on surfaces (except floor for performance)
-    if (hitObject && normal.y < 0.9) {
-      this.createImpactMark(position, normal, hitObject);
-    }
   }
 } 

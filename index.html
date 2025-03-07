@@ -5,17 +5,34 @@
   <meta charset="utf-8">
   <title>Three.js FPS Game</title>
   <link rel="stylesheet" href="styles/main.css">
-  <!-- Load Three.js and controls via regular script tags -->
-  <script src="https://cdn.jsdelivr.net/gh/mrdoob/three.js@r128/build/three.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/gh/mrdoob/three.js@r128/examples/js/controls/PointerLockControls.js"></script>
-  <!-- Load our gun system -->
-  <script src="guns.js"></script>
-  <!-- Load our building system -->
-  <script src="buildings.js"></script>
-  <!-- Load our animal system -->
-  <script src="animals.js"></script>
-  <!-- Load our enemy system -->
-  <script src="enemies.js"></script>
+  <!-- Add import map for module resolution -->
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.157.0/build/three.module.js",
+        "three/examples/jsm/controls/PointerLockControls.js": "https://unpkg.com/three@0.157.0/examples/jsm/controls/PointerLockControls.js"
+      }
+    }
+  </script>
+  <!-- Load our systems as modules -->
+  <script type="module">
+    import { Building, House, OfficeBuilding } from './buildings.js';
+    import { Animal, Bunny } from './animals.js';
+    import { Enemy } from './enemies.js';
+    // Create BuildingSystem namespace
+    window.BuildingSystem = {
+      Building,
+      House,
+      OfficeBuilding
+    };
+    window.AnimalSystem = {
+      Animal,
+      Bunny
+    };
+    window.EnemySystem = {
+      Enemy
+    };
+  </script>
 </head>
 
 <body>
@@ -48,7 +65,12 @@
     <p id="kill-message">You eliminated 0 enemies</p>
     <button id="restart-button">Play Again</button>
   </div>
-  <script>
+  <script type="module">
+    // Import Three.js from CDN
+    import * as THREE from 'https://unpkg.com/three@0.157.0/build/three.module.js';
+    import { PointerLockControls } from 'https://unpkg.com/three@0.157.0/examples/jsm/controls/PointerLockControls.js';
+    import { GunSystem } from './src/utils/GunSystem.js';
+
     // Game variables
     let camera, scene, renderer, controls;
 
@@ -292,7 +314,7 @@
       createHillyTerrain();
 
       // Setup controls
-      controls = new THREE.PointerLockControls(camera, document.body);
+      controls = new PointerLockControls(camera, document.body);
       window.controls = controls; // Make controls globally accessible
 
       // Add event listeners for controls
@@ -1100,12 +1122,8 @@
     GunSystem.Gun.prototype.checkBulletCollisions = function (bullet, walls) {
       // Check for collisions with enemies first
       if (checkBulletEnemyCollisions(bullet)) {
-        return {
-          hit: true,
-          position: bullet.position.clone(),
-          normal: new THREE.Vector3(0, 1, 0), // Default normal
-          object: null
-        };
+        bullet.userData.alive = false;
+        return true;
       }
 
       // Otherwise use the original method

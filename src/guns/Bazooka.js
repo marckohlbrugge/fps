@@ -1,3 +1,4 @@
+import * as THREE from 'https://unpkg.com/three@0.157.0/build/three.module.js';
 import { Gun } from './Gun.js';
 
 /**
@@ -6,9 +7,11 @@ import { Gun } from './Gun.js';
 export class Bazooka extends Gun {
   constructor(scene, camera) {
     super(scene, camera);
-    this.shootCooldown = 2.0; // Very slow fire rate
-    this.damage = 200; // High damage
-    this.isMouseDown = false;
+    this.name = "Bazooka";
+    this.damage = 100;
+    this.reloadTime = 2000; // 2 seconds
+    this.lastShootTime = 0;
+    this.canShoot = true;
   }
 
   create() {
@@ -74,7 +77,7 @@ export class Bazooka extends Gun {
     console.log("Firing bazooka!");
 
     // Play shooting sound
-    this.playSound('shoot');
+    this.effects.playSound('shoot');
 
     // Create rocket geometry - make it larger and more visible
     const rocketGeometry = new THREE.CylinderGeometry(0.05, 0.1, 0.4, 8);
@@ -126,168 +129,76 @@ export class Bazooka extends Gun {
     this.scene.add(rocket);
     this.bullets.push(rocket);
 
-    // Add recoil animation
-    const originalPosition = this.mesh.position.clone();
-    this.mesh.position.z += 0.2; // Strong recoil
+    // Add muzzle flash
+    this.effects.createMuzzleFlash(barrelTip, rocketDirection);
 
-    // Return to original position gradually
-    setTimeout(() => {
-      this.mesh.position.copy(originalPosition);
-    }, 300);
-
-    // Set shooting cooldown
+    // Set cooldown
     this.canShoot = false;
     setTimeout(() => {
       this.canShoot = true;
-      console.log("Bazooka ready to fire again");
-    }, this.shootCooldown * 1000);
+    }, this.reloadTime);
   }
 
   createRocketTrail(rocket) {
-    // Create a more visible trail for the rocket
+    // Create a trail using particles
     const trailGeometry = new THREE.BufferGeometry();
     const trailMaterial = new THREE.PointsMaterial({
-      color: 0xff5500,
-      size: 0.5,
+      color: 0xff4400,
+      size: 0.1,
       transparent: true,
       opacity: 0.8,
-      blending: THREE.AdditiveBlending,
-      sizeAttenuation: true
+      blending: THREE.AdditiveBlending
     });
 
-    // Create a trail with multiple points
+    // Create trail particles
     const particleCount = 50;
     const positions = new Float32Array(particleCount * 3);
-    const colors = new Float32Array(particleCount * 3);
 
-    // Initialize all positions to rocket's position
+    // Initialize all particles at rocket position
     for (let i = 0; i < particleCount; i++) {
-      const i3 = i * 3;
-      positions[i3] = rocket.position.x;
-      positions[i3 + 1] = rocket.position.y;
-      positions[i3 + 2] = rocket.position.z;
-
-      // Color gradient from yellow to red
-      const t = i / particleCount;
-      colors[i3] = 1.0; // R
-      colors[i3 + 1] = 0.5 * (1 - t); // G
-      colors[i3 + 2] = 0.0; // B
+      positions[i * 3] = rocket.position.x;
+      positions[i * 3 + 1] = rocket.position.y;
+      positions[i * 3 + 2] = rocket.position.z;
     }
 
     trailGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    trailGeometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
 
     const trail = new THREE.Points(trailGeometry, trailMaterial);
+    this.scene.add(trail);
 
     // Store trail data in rocket
     rocket.userData.trail = trail;
     rocket.userData.trailPositions = positions;
-    rocket.userData.trailColors = colors;
-    rocket.userData.trailMaxParticles = particleCount;
-    rocket.userData.lastTrailUpdateTime = performance.now();
+    rocket.userData.trailIndex = 0;
+    rocket.userData.lastTrailUpdate = performance.now();
 
-    this.scene.add(trail);
-
-    // Add smoke particles that emit continuously
-    this.createRocketSmokeEmitter(rocket);
-  }
-
-  createRocketSmokeEmitter(rocket) {
-    // Create a function to emit smoke particles
-    rocket.userData.emitSmoke = () => {
-      if (!rocket.userData.alive) return;
-
-      // Create a smoke particle
-      const smokeGeometry = new THREE.BufferGeometry();
-      const smokePositions = new Float32Array(3);
-      smokePositions[0] = rocket.position.x;
-      smokePositions[1] = rocket.position.y;
-      smokePositions[2] = rocket.position.z;
-
-      smokeGeometry.setAttribute('position', new THREE.BufferAttribute(smokePositions, 3));
-
-      const smokeMaterial = new THREE.PointsMaterial({
-        color: 0x888888,
-        size: 0.5 + Math.random() * 0.5,
-        transparent: true,
-        opacity: 0.5,
-        sizeAttenuation: true
-      });
-
-      const smoke = new THREE.Points(smokeGeometry, smokeMaterial);
-      smoke.userData.createdAt = performance.now();
-      smoke.userData.lifespan = 1000; // 1 second
-      smoke.userData.isSmoke = true;
-
-      // Add slight random velocity
-      smoke.userData.velocity = new THREE.Vector3(
-        (Math.random() - 0.5) * 0.5,
-        (Math.random() - 0.5) * 0.5,
-        (Math.random() - 0.5) * 0.5
-      );
-
-      this.scene.add(smoke);
-
-      // Add to global particles array
-      if (!window.particles) window.particles = [];
-      window.particles.push(smoke);
-
-      // Schedule next smoke emission
-      if (rocket.userData.alive) {
-        setTimeout(rocket.userData.emitSmoke, 50);
-      }
-    };
-
-    // Start emitting smoke
-    rocket.userData.emitSmoke();
+    return trail;
   }
 
   updateRocketTrail(rocket, delta) {
-    if (!rocket.userData.trail) return;
-
     const currentTime = performance.now();
-    const timeSinceLastUpdate = currentTime - (rocket.userData.lastTrailUpdateTime || 0);
+    const timeSinceLastUpdate = currentTime - rocket.userData.lastTrailUpdate;
 
-    // Update trail less frequently for performance
-    if (timeSinceLastUpdate < 20) return;
+    // Update trail every 16ms (approximately 60fps)
+    if (timeSinceLastUpdate >= 16) {
+      const positions = rocket.userData.trailPositions;
+      const count = positions.length / 3;
 
-    rocket.userData.lastTrailUpdateTime = currentTime;
+      // Shift all particles back
+      for (let i = count - 1; i > 0; i--) {
+        positions[i * 3] = positions[(i - 1) * 3];
+        positions[i * 3 + 1] = positions[(i - 1) * 3 + 1];
+        positions[i * 3 + 2] = positions[(i - 1) * 3 + 2];
+      }
 
-    // Get positions array
-    const positions = rocket.userData.trailPositions;
-    const colors = rocket.userData.trailColors;
+      // Set first particle to rocket position
+      positions[0] = rocket.position.x;
+      positions[1] = rocket.position.y;
+      positions[2] = rocket.position.z;
 
-    // Shift all particles one position back
-    for (let i = rocket.userData.trailMaxParticles - 1; i > 0; i--) {
-      positions[i * 3] = positions[(i - 1) * 3];
-      positions[i * 3 + 1] = positions[(i - 1) * 3 + 1];
-      positions[i * 3 + 2] = positions[(i - 1) * 3 + 2];
+      rocket.userData.trail.geometry.attributes.position.needsUpdate = true;
+      rocket.userData.lastTrailUpdate = currentTime;
     }
-
-    // Add slight randomness to trail
-    const randomOffset = new THREE.Vector3(
-      (Math.random() - 0.5) * 0.05,
-      (Math.random() - 0.5) * 0.05,
-      (Math.random() - 0.5) * 0.05
-    );
-
-    // Set first particle to rocket position
-    positions[0] = rocket.position.x + randomOffset.x;
-    positions[1] = rocket.position.y + randomOffset.y;
-    positions[2] = rocket.position.z + randomOffset.z;
-
-    // Update the buffer attribute
-    rocket.userData.trail.geometry.attributes.position.needsUpdate = true;
-
-    // Fade out particles over time
-    for (let i = 0; i < rocket.userData.trailMaxParticles; i++) {
-      const alpha = 1 - (i / rocket.userData.trailMaxParticles);
-      rocket.userData.trail.geometry.attributes.color.array[i * 3 + 0] *= 0.99;
-      rocket.userData.trail.geometry.attributes.color.array[i * 3 + 1] *= 0.99;
-      rocket.userData.trail.geometry.attributes.color.array[i * 3 + 2] *= 0.99;
-    }
-
-    rocket.userData.trail.geometry.attributes.color.needsUpdate = true;
   }
 
   createExplosion(position, radius, force) {
@@ -382,7 +293,7 @@ export class Bazooka extends Gun {
     this.applyExplosionDamage(position, radius, force);
 
     // Play explosion sound
-    this.playSound('explosion');
+    this.effects.playSound('explosion');
 
     // Create ground scorch mark if explosion is near ground
     if (position.y < radius) {
@@ -510,5 +421,18 @@ export class Bazooka extends Gun {
         }
       }
     }
+  }
+
+  // Override the parent class's checkBulletCollisions to use enhanced explosion
+  checkBulletCollisions(bullet, walls) {
+    const collision = super.checkBulletCollisions(bullet, walls);
+    if (collision && bullet.userData.isRocket) {
+      this.effects.createEnhancedExplosion(
+        bullet.position.clone(),
+        bullet.userData.explosionRadius,
+        bullet.userData.explosionForce
+      );
+    }
+    return collision;
   }
 } 

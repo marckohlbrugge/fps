@@ -310,7 +310,7 @@ export class SniperRifle extends Gun {
     if (!this.canShoot) return;
 
     // Play shooting sound
-    this.playSound('shoot');
+    this.effects.playSound('shoot_sniper');
 
     // Create bullet geometry
     const bulletGeometry = new THREE.SphereGeometry(0.05, 8, 8);
@@ -339,16 +339,8 @@ export class SniperRifle extends Gun {
     this.scene.add(bullet);
     this.bullets.push(bullet);
 
-    // Add bullet trail
-    const trailGeometry = new THREE.BufferGeometry();
-    const trailMaterial = new THREE.LineBasicMaterial({ color: 0xff0000, opacity: 0.5, transparent: true });
-
-    const trailPositions = new Float32Array(2 * 3); // 2 points, 3 coordinates each
-    trailGeometry.setAttribute('position', new THREE.BufferAttribute(trailPositions, 3));
-
-    const trail = new THREE.Line(trailGeometry, trailMaterial);
-    bullet.userData.trail = trail;
-    this.scene.add(trail);
+    // Add bullet trail using GunEffects utility
+    this.effects.createBulletTrail(bullet, 0xff0000);
 
     // Add recoil animation
     const originalPosition = this.mesh.position.clone();
@@ -364,34 +356,5 @@ export class SniperRifle extends Gun {
     setTimeout(() => {
       this.canShoot = true;
     }, this.shootCooldown * 1000);
-  }
-
-  // Custom sound for sniper rifle
-  playSound(type) {
-    if (type === 'shoot') {
-      // Create oscillators for a sniper rifle sound
-      const oscillator = this.audioContext.createOscillator();
-      const gainNode = this.audioContext.createGain();
-
-      // Connect nodes
-      oscillator.connect(gainNode);
-      gainNode.connect(this.audioContext.destination);
-
-      // Set parameters for a sniper rifle sound
-      oscillator.type = 'sawtooth';
-      oscillator.frequency.setValueAtTime(150, this.audioContext.currentTime);
-      oscillator.frequency.exponentialRampToValueAtTime(20, this.audioContext.currentTime + 0.2);
-
-      // Volume envelope
-      gainNode.gain.setValueAtTime(0.3, this.audioContext.currentTime);
-      gainNode.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + 0.2);
-
-      // Play and stop
-      oscillator.start();
-      oscillator.stop(this.audioContext.currentTime + 0.2);
-    } else {
-      // For other sound types (impact, explosion), use the parent class method
-      super.playSound(type);
-    }
   }
 } 

@@ -1,6 +1,8 @@
+import * as THREE from 'https://unpkg.com/three@0.157.0/build/three.module.js';
+
 // Animal system for FPS game
 
-class Animal {
+export class Animal {
   constructor(scene, position) {
     this.scene = scene;
     this.position = position.clone();
@@ -32,7 +34,7 @@ class Animal {
   }
 }
 
-class Bunny extends Animal {
+export class Bunny extends Animal {
   constructor(scene, position) {
     super(scene, position);
     this.hopHeight = 0.5 + Math.random() * 0.3; // Random hop height
@@ -432,14 +434,6 @@ class Bunny extends Animal {
     // Remove after a while
     setTimeout(() => {
       this.destroy();
-
-      // Remove from global array if it exists
-      if (window.bunnies) {
-        const index = window.bunnies.indexOf(this);
-        if (index !== -1) {
-          window.bunnies.splice(index, 1);
-        }
-      }
     }, 10000); // Remove after 10 seconds
   }
 
@@ -498,10 +492,4 @@ class Bunny extends Animal {
 
     window.particles.push(bloodPool);
   }
-}
-
-// Export animal classes
-window.AnimalSystem = {
-  Animal,
-  Bunny
-}; 
+} 

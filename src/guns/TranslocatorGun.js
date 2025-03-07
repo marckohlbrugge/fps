@@ -1,4 +1,4 @@
-import * as THREE from 'three';
+import * as THREE from 'https://unpkg.com/three@0.157.0/build/three.module.js';
 import { Gun } from './Gun.js';
 
 export class TranslocatorGun extends Gun {
@@ -117,10 +117,11 @@ export class TranslocatorGun extends Gun {
 
     // Create projectile
     const projectileGeometry = new THREE.SphereGeometry(0.2, 16, 16);
-    const projectileMaterial = new THREE.MeshBasicMaterial({
+    const projectileMaterial = new THREE.MeshPhongMaterial({
       color: 0x00ffff,
       emissive: 0x00ffff,
-      emissiveIntensity: 1
+      emissiveIntensity: 0.5,
+      shininess: 50
     });
     this.projectile = new THREE.Mesh(projectileGeometry, projectileMaterial);
 
@@ -151,7 +152,7 @@ export class TranslocatorGun extends Gun {
     this.scene.add(this.projectileLight);
 
     // Play shoot sound
-    this.playSound('shoot');
+    this.effects.playSound('shoot_translocator');
 
     // Start controlling projectile immediately
     this.startProjectileControl();
@@ -203,11 +204,78 @@ export class TranslocatorGun extends Gun {
       crosshair.style.display = 'none';
     }
 
+    // Create HUD elements
+    this.createProjectileHUD();
+
+    // Add mouse movement handler for projectile control
+    this.mouseMoveHandler = (event) => {
+      if (!this.isControllingProjectile || !this.projectileCamera) return;
+
+      // Get mouse movement
+      const movementX = event.movementX || event.mozMovementX || event.webkitMovementX || 0;
+      const movementY = event.movementY || event.mozMovementY || event.webkitMovementY || 0;
+
+      // Convert to rotation (same sensitivity as player camera)
+      const rotationX = movementY * 0.002;
+      const rotationY = movementX * 0.002;
+
+      // Update camera rotation using Euler angles
+      euler.setFromQuaternion(this.projectileCamera.quaternion);
+      euler.y -= rotationY;
+      euler.x -= rotationX;
+
+      // Clamp vertical rotation to prevent flipping
+      euler.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, euler.x));
+
+      // Apply rotation to camera
+      this.projectileCamera.quaternion.setFromEuler(euler);
+    };
+
+    // Add pointer lock change handler
+    this.pointerLockChangeHandler = () => {
+      if (!document.pointerLockElement) {
+        // If pointer lock is lost, detonate the projectile
+        this.detonateProjectile();
+      }
+    };
+
+    // Add event listeners
+    document.addEventListener('mousemove', this.mouseMoveHandler, false);
+    document.addEventListener('pointerlockchange', this.pointerLockChangeHandler, false);
+
     // Play transition sound
-    this.playSound('transition');
+    this.effects.playSound('translocator_transition');
 
     // Set flight start time
     this.flightStartTime = performance.now() / 1000;
+  }
+
+  // Create projectile HUD elements
+  createProjectileHUD() {
+    // Create container for HUD elements
+    const hudContainer = document.createElement('div');
+    hudContainer.style.position = 'fixed';
+    hudContainer.style.top = '20px';
+    hudContainer.style.right = '20px';
+    hudContainer.style.color = '#00ffff';
+    hudContainer.style.fontFamily = 'monospace';
+    hudContainer.style.fontSize = '16px';
+    hudContainer.style.textShadow = '0 0 5px #00ffff';
+
+    // Create speed indicator
+    const speedIndicator = document.createElement('div');
+    speedIndicator.id = 'projectile-speed';
+    speedIndicator.textContent = `Speed: ${Math.round(this.projectileControlSpeed)} m/s`;
+    hudContainer.appendChild(speedIndicator);
+
+    // Create flight time indicator
+    const timeIndicator = document.createElement('div');
+    timeIndicator.id = 'flight-time';
+    timeIndicator.textContent = `Time: ${this.maxFlightTime.toFixed(1)}s`;
+    hudContainer.appendChild(timeIndicator);
+
+    // Add to document
+    document.body.appendChild(hudContainer);
   }
 
   updateProjectileControl(delta) {
@@ -233,7 +301,7 @@ export class TranslocatorGun extends Gun {
     }
 
     // Create trail particles
-    this.createTrailParticle();
+    this.effects.createTranslocatorTrailParticle(this.projectile.position.clone());
 
     // Check for collisions
     this.checkProjectileCollisions();
@@ -263,62 +331,28 @@ export class TranslocatorGun extends Gun {
     this.projectileCamera.position.y += (Math.random() - 0.5) * shakeAmount;
   }
 
-  createTrailParticle() {
-    // Create a trail particle
-    const particleGeometry = new THREE.SphereGeometry(0.05 + Math.random() * 0.05, 8, 8);
-    const particleMaterial = new THREE.MeshBasicMaterial({
-      color: 0x00ffff,
-      transparent: true,
-      opacity: 0.7
-    });
-
-    const particle = new THREE.Mesh(particleGeometry, particleMaterial);
-    particle.position.copy(this.projectile.position);
-
-    // Add random offset
-    particle.position.x += (Math.random() - 0.5) * 0.1;
-    particle.position.y += (Math.random() - 0.5) * 0.1;
-    particle.position.z += (Math.random() - 0.5) * 0.1;
-
-    // Add particle data
-    particle.userData = {
-      createdAt: performance.now(),
-      lifespan: 500 + Math.random() * 500 // 0.5-1 second lifespan
-    };
-
-    // Add to scene and trail array
-    this.scene.add(particle);
-    this.trailParticles.push(particle);
-  }
-
   checkProjectileCollisions() {
     if (!this.projectile || !this.isControllingProjectile) return;
 
-    // Check collision with ground
-    // Assuming ground is at y=0, adjust if your ground is at a different height
-    if (this.projectile.position.y <= 0.2) { // 0.2 is the projectile radius
-      this.detonateProjectile();
-      return;
+    // Check for wall collisions
+    if (window.walls) {
+      for (const wall of window.walls) {
+        if (wall.userData.destroyed) continue;
+
+        const wallBoundingBox = new THREE.Box3().setFromObject(wall);
+        const projectileBoundingBox = new THREE.Box3().setFromObject(this.projectile);
+
+        if (wallBoundingBox.intersectsBox(projectileBoundingBox)) {
+          this.detonateProjectile();
+          return;
+        }
+      }
     }
 
-    // Check collision with walls
-    for (const wall of window.walls) {
-      // Skip destroyed walls
-      if (wall.userData.destroyed) continue;
-
-      // Create bounding boxes
-      const projectileSphere = new THREE.Sphere(
-        this.projectile.position.clone(),
-        0.2 // Projectile radius
-      );
-
-      const wallBox = new THREE.Box3().setFromObject(wall);
-
-      // Check for collision
-      if (wallBox.intersectsSphere(projectileSphere)) {
-        this.detonateProjectile();
-        return;
-      }
+    // Check for floor collision
+    if (this.projectile.position.y <= 0.2) {
+      this.detonateProjectile();
+      return;
     }
 
     // Check collision with enemies
@@ -350,11 +384,8 @@ export class TranslocatorGun extends Gun {
   detonateProjectile() {
     if (!this.projectile) return;
 
-    // Create explosion
-    this.createExplosion(this.projectile.position.clone(), this.explosionRadius, this.explosionForce);
-
-    // Apply damage to nearby objects
-    this.applyExplosionDamage(this.projectile.position.clone(), this.explosionRadius, this.explosionForce);
+    // Create teleport effect at projectile position
+    this.effects.createTeleportEffect(this.projectile.position.clone());
 
     // Remove projectile
     this.scene.remove(this.projectile);
@@ -406,60 +437,82 @@ export class TranslocatorGun extends Gun {
     // Reset flag
     this.isControllingProjectile = false;
 
-    // Play explosion sound
-    this.playSound('explosion');
+    // Play teleport sound
+    this.effects.playSound('translocator_teleport');
 
     // Add a camera shake effect to the player camera
     if (typeof window.shakeCamera === 'function') {
       window.shakeCamera(0.5);
     }
 
-    console.log("Projectile detonated - Returning to player view");
+    console.log("Projectile teleported - Returning to player view");
   }
 
   playSound(type) {
-    // Create and play sound
-    const oscillator = this.audioContext.createOscillator();
-    const gainNode = this.audioContext.createGain();
+    // Use the effects system for sound playback
+    this.effects.playSound(type);
+  }
 
-    oscillator.connect(gainNode);
-    gainNode.connect(this.audioContext.destination);
+  // Update trail particles
+  updateTrailParticles(delta) {
+    // Update existing trail particles
+    if (window.particles) {
+      for (let i = window.particles.length - 1; i >= 0; i--) {
+        const particle = window.particles[i];
 
-    switch (type) {
-      case 'shoot':
-        oscillator.type = 'sine';
-        oscillator.frequency.setValueAtTime(880, this.audioContext.currentTime);
-        oscillator.frequency.exponentialRampToValueAtTime(220, this.audioContext.currentTime + 0.2);
-        gainNode.gain.setValueAtTime(0.3, this.audioContext.currentTime);
-        gainNode.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + 0.2);
-        oscillator.start();
-        oscillator.stop(this.audioContext.currentTime + 0.2);
-        break;
+        // Skip particles that aren't trail particles
+        if (!particle.userData.initialScale) continue;
 
-      case 'transition':
-        oscillator.type = 'sine';
-        oscillator.frequency.setValueAtTime(440, this.audioContext.currentTime);
-        oscillator.frequency.exponentialRampToValueAtTime(880, this.audioContext.currentTime + 0.3);
-        gainNode.gain.setValueAtTime(0.2, this.audioContext.currentTime);
-        gainNode.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + 0.3);
-        oscillator.start();
-        oscillator.stop(this.audioContext.currentTime + 0.3);
-        break;
+        const age = (performance.now() - particle.userData.createdAt) / particle.userData.lifespan;
 
-      case 'explosion':
-        oscillator.type = 'sawtooth';
-        oscillator.frequency.setValueAtTime(100, this.audioContext.currentTime);
-        oscillator.frequency.exponentialRampToValueAtTime(20, this.audioContext.currentTime + 0.5);
-        gainNode.gain.setValueAtTime(0.5, this.audioContext.currentTime);
-        gainNode.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + 0.5);
-        oscillator.start();
-        oscillator.stop(this.audioContext.currentTime + 0.5);
-        break;
+        // Remove expired particles
+        if (age >= 1) {
+          this.scene.remove(particle);
+          window.particles.splice(i, 1);
+          continue;
+        }
 
-      default:
-        // For other sound types, use the parent class method
-        super.playSound(type);
-        break;
+        // Scale down and fade out over time
+        const scale = 1 - age;
+        particle.scale.copy(particle.userData.initialScale.clone().multiplyScalar(scale));
+        if (particle.material) {
+          particle.material.opacity = 0.8 * (1 - age);
+        }
+      }
+    }
+  }
+
+  // Update projectile HUD elements
+  updateProjectileHUD(delta) {
+    // Update speed indicator if it exists
+    const speedIndicator = document.getElementById('projectile-speed');
+    if (speedIndicator) {
+      const speed = this.projectileControlSpeed;
+      speedIndicator.textContent = `Speed: ${Math.round(speed)} m/s`;
+    }
+
+    // Update flight time indicator if it exists
+    const timeIndicator = document.getElementById('flight-time');
+    if (timeIndicator) {
+      const currentTime = performance.now() / 1000;
+      const flightTime = currentTime - this.flightStartTime;
+      const timeLeft = Math.max(0, this.maxFlightTime - flightTime);
+      timeIndicator.textContent = `Time: ${timeLeft.toFixed(1)}s`;
+    }
+  }
+
+  // Remove projectile HUD elements
+  removeProjectileHUD() {
+    // Remove speed indicator
+    const speedIndicator = document.getElementById('projectile-speed');
+    if (speedIndicator) {
+      speedIndicator.remove();
+    }
+
+    // Remove flight time indicator
+    const timeIndicator = document.getElementById('flight-time');
+    if (timeIndicator) {
+      timeIndicator.remove();
     }
   }
 } 
